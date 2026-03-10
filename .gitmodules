@@ -1,0 +1,3 @@
+[submodule "conflictscope"]
+	path = conflictscope
+	url = https://github.com/andyjliu/conflictscope
