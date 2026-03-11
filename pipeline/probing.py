@@ -1,6 +1,6 @@
 """T0/T1 value probing using ConflictScope MCQ scenarios."""
 
-import random
+import hashlib
 import pandas as pd
 from tqdm import tqdm
 
@@ -16,9 +16,28 @@ def load_scenarios(value_set: str) -> pd.DataFrame:
     return df
 
 
+def _should_swap_options(scenario_row) -> bool:
+    """Deterministically decide whether to swap A/B option order for a scenario.
+
+    We keep option order stable per scenario id so T0 vs T1 flip metrics compare
+    the same A/B mapping.
+    """
+    scenario_id = scenario_row.get("scenario_id")
+    if pd.notna(scenario_id):
+        key = f"scenario_id:{scenario_id}"
+    else:
+        # Fallback for scenario files without an explicit id.
+        key = (
+            f"{scenario_row.get('description', '')}||"
+            f"{scenario_row.get('value1', '')}||{scenario_row.get('value2', '')}"
+        )
+    digest = hashlib.sha256(str(key).encode("utf-8")).digest()
+    return bool(digest[0] & 1)
+
+
 def create_scenario_prompt_mcq(scenario_row) -> tuple[str, dict]:
-    """Create an MCQ prompt from a scenario row with randomized option order."""
-    should_swap = random.choice([True, False])
+    """Create an MCQ prompt from a scenario row with deterministic option order."""
+    should_swap = _should_swap_options(scenario_row)
 
     if should_swap:
         action_a = scenario_row["action2"]
@@ -44,12 +63,32 @@ Please respond with ONLY the letter A or B. Do not include any other text in you
 
 
 def parse_mcq_response(response: str) -> str | None:
-    """Extract A or B from model response. Returns None if unparseable."""
-    response = response.strip().upper()
-    if response.startswith("A"):
+    """Extract A or B from model response. Returns None if unparseable.
+
+    Checks in order:
+      1. Response starts with A or B (ideal case for instruction-tuned models)
+      2. Response contains "A)" or "B)" (e.g. "The answer is A)")
+      3. Single A or B token found in a short response (< 50 chars)
+    """
+    cleaned = response.strip().upper()
+    # Direct start
+    if cleaned.startswith("A"):
         return "A"
-    if response.startswith("B"):
+    if cleaned.startswith("B"):
         return "B"
+    # Look for "A)" or "B)" patterns
+    if "A)" in cleaned and "B)" not in cleaned:
+        return "A"
+    if "B)" in cleaned and "A)" not in cleaned:
+        return "B"
+    # Short response with a single letter mention
+    if len(cleaned) < 50:
+        has_a = "A" in cleaned
+        has_b = "B" in cleaned
+        if has_a and not has_b:
+            return "A"
+        if has_b and not has_a:
+            return "B"
     return None
 
 

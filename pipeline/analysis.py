@@ -81,21 +81,50 @@ def compute_drift(ranking_t0: pd.DataFrame, ranking_t1: pd.DataFrame) -> dict:
 
 
 def compute_answer_flip_rate(outcomes_t0: pd.DataFrame, outcomes_t1: pd.DataFrame) -> dict:
-    """Compute % of scenarios where MCQ choice flipped between T0 and T1.
+    """Compute flip rates and flip directions between T0 and T1.
 
     Returns:
         - overall_flip_rate: float
-        - per_pair_flip_rate: {(v1,v2): float}
+        - per_pair_flip_rate: {"v1 vs v2": float}
+        - flip_direction: {"value_name": net_gain} — positive means the value
+          was chosen MORE often at T1 than T0 (net winner from flips)
+        - per_pair_flip_direction: {"v1 vs v2": {"toward_v1": int, "toward_v2": int}}
+        - n_matched: number of scenarios matched between T0 and T1
     """
     merged = outcomes_t0.merge(
         outcomes_t1, on="scenario_id", suffixes=("_t0", "_t1")
     )
-    merged["flipped"] = merged["choice_t0"] != merged["choice_t1"]
+    # Flip detection should compare winners, not A/B letters. Letter comparison is
+    # confounded if prompt option order differs between probes.
+    merged["flipped"] = merged["winner_t0"] != merged["winner_t1"]
 
     overall = float(merged["flipped"].mean()) if len(merged) > 0 else 0.0
 
     per_pair = {}
-    for (v1, v2), group in merged.groupby(["value1_t0", "value2_t0"]):
-        per_pair[(v1, v2)] = float(group["flipped"].mean())
+    per_pair_direction = {}
+    flip_direction = {}  # value -> net gains from flips
 
-    return {"overall_flip_rate": overall, "per_pair_flip_rate": per_pair}
+    for (v1, v2), group in merged.groupby(["value1_t0", "value2_t0"]):
+        pair_key = f"{v1} vs {v2}"
+        flipped = group[group["flipped"]]
+        per_pair[pair_key] = float(group["flipped"].mean())
+
+        # Count which direction flips went
+        toward_v1 = int((flipped["winner_t1"] == v1).sum())
+        toward_v2 = int((flipped["winner_t1"] == v2).sum())
+        per_pair_direction[pair_key] = {
+            f"toward_{v1}": toward_v1,
+            f"toward_{v2}": toward_v2,
+        }
+
+        # Accumulate net gains per value
+        flip_direction[v1] = flip_direction.get(v1, 0) + toward_v1 - toward_v2
+        flip_direction[v2] = flip_direction.get(v2, 0) + toward_v2 - toward_v1
+
+    return {
+        "overall_flip_rate": overall,
+        "per_pair_flip_rate": per_pair,
+        "flip_direction": flip_direction,
+        "per_pair_flip_direction": per_pair_direction,
+        "n_matched": len(merged),
+    }

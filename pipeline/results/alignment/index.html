@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Persona Drifting Across Alignment Methods</title>
+  <style>
+    :root {
+      --bg: #f5f3ee;
+      --panel: #fcfbf8;
+      --ink: #1c2026;
+      --muted: #59616b;
+      --line: #d7dce2;
+      --accent: #163756;
+      --title: "Libre Franklin", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #faf8f3 0%, var(--bg) 100%);
+      color: var(--ink);
+      font-family: var(--body);
+      line-height: 1.58;
+    }
+    .page {
+      width: min(1220px, calc(100vw - 36px));
+      margin: 24px auto 72px;
+    }
+    .masthead, .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 24px rgba(18, 29, 43, 0.05);
+    }
+    .masthead {
+      padding: 34px 36px 28px;
+    }
+    .section {
+      margin-top: 16px;
+      padding: 28px 30px;
+    }
+    .eyebrow {
+      display: inline-block;
+      margin-bottom: 12px;
+      font-family: var(--title);
+      font-size: 0.8rem;
+      letter-spacing: 0.17em;
+      text-transform: uppercase;
+      color: #697789;
+    }
+    h1, h2, h3 {
+      margin: 0 0 10px;
+      font-family: var(--title);
+      letter-spacing: 0.01em;
+    }
+    h1 {
+      font-size: clamp(2.3rem, 4.4vw, 3.8rem);
+      line-height: 1.03;
+      color: var(--accent);
+      max-width: 12ch;
+    }
+    h2 {
+      font-size: 1.45rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+    }
+    h3 {
+      font-size: 0.98rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #627387;
+    }
+    p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 1.01rem;
+    }
+    strong {
+      color: var(--ink);
+    }
+    code {
+      font-size: 0.95em;
+      background: #eef2f5;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .abstract {
+      max-width: 76ch;
+      color: var(--ink);
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      margin-top: 22px;
+      border-top: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+    }
+    .meta div {
+      padding: 16px 14px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+    .meta strong {
+      display: block;
+      margin-bottom: 4px;
+      font-family: var(--title);
+      font-size: 1.35rem;
+      color: var(--accent);
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+      gap: 26px;
+      align-items: start;
+    }
+    .metrics-explain {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .metric-box, .finding, .note-box {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      padding: 16px;
+    }
+    .metric-box code {
+      display: inline-block;
+      margin-top: 6px;
+    }
+    .finding-grid, .note-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .finding .value {
+      display: block;
+      margin-top: 8px;
+      font-family: var(--title);
+      font-size: 1.14rem;
+      color: var(--accent);
+    }
+    .figure-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 18px;
+    }
+    figure.card {
+      margin: 0;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      padding: 10px;
+    }
+    figure.card a {
+      display: block;
+      text-decoration: none;
+    }
+    figure.card img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #fff;
+    }
+    figcaption {
+      padding: 10px 4px 2px;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    figcaption strong {
+      display: block;
+      margin-bottom: 4px;
+      font-family: var(--title);
+      font-size: 0.92rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink);
+    }
+    .metrics {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18px;
+      font-size: 0.95rem;
+      background: #ffffff;
+      border: 1px solid var(--line);
+    }
+    .metrics th, .metrics td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+    .metrics th {
+      font-family: var(--title);
+      font-size: 0.89rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--accent);
+      background: #f2f5f8;
+    }
+    .footnote {
+      margin-top: 14px;
+      font-size: 0.93rem;
+      color: var(--muted);
+    }
+    @media (max-width: 900px) {
+      .page { width: min(100vw - 18px, 1220px); }
+      .masthead { padding: 26px 22px 22px; }
+      .section { padding: 22px; }
+      .two-col, .figure-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="masthead">
+      <span class="eyebrow">Research Summary</span>
+      <h1>Persona Drifting Across Alignment Methods</h1>
+      <p class="abstract">
+        This page summarizes saved results from the alignment-method comparison in <code>pipeline/results/alignment/</code>.
+        The main empirical result is a cohort split between <strong>Base + Instruct</strong> and the <strong>Tulu SFT/DPO/RLVR</strong> stack,
+        especially in <code>HHH</code>. Figures are linked to full-resolution images.
+      </p>
+      <div class="meta">
+        <div><strong>40</strong><span>Conditions</span></div>
+        <div><strong>5</strong><span>Models</span></div>
+        <div><strong>2</strong><span>Value Sets</span></div>
+        <div><strong>2</strong><span>Domains</span></div>
+        <div><strong>5t, 10t</strong><span>Conversation Lengths</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Experimental Scope And Metrics</h2>
+      <div class="two-col">
+        <div>
+          <p><strong>Models:</strong> <code>llama-3.1-base</code>, <code>llama-3.1-instruct</code>, <code>tulu-3-sft</code>, <code>tulu-3-dpo</code>, and <code>tulu-3-rlvr</code>.</p>
+          <p><strong>Value sets:</strong> <code>HHH</code> and <code>personalprotective</code>.</p>
+          <p><strong>Conditions:</strong> politics and philosophy conversations at 5 and 10 turns, with T0 and T1 Bradley-Terry value rankings saved for each model-condition pair.</p>
+        </div>
+        <div>
+          <p><strong>Interpretation note on sign consistency:</strong> this is <em>not</em> “how often the model preferred the value” across pairwise questions. It is the fraction of conditions in which the value’s signed drift had the same sign after conversation.</p>
+          <p>Multiple values can therefore have 100% sign consistency simultaneously if one consistently rises and another consistently falls. Bradley-Terry abilities are relative and mean-centered, so consistent opposite movements are expected.</p>
+        </div>
+      </div>
+      <div class="metrics-explain">
+        <div class="metric-box">
+          <h3>Per-Value Delta</h3>
+          <p>Change in Bradley-Terry ability for one value between T0 and T1.</p>
+          <code>delta[v] = ability_T1[v] - ability_T0[v]</code>
+        </div>
+        <div class="metric-box">
+          <h3>Signed Normalized Mean Drift</h3>
+          <p>Per-condition delta divided by the T0 standard deviation of the ability vector, then averaged across conditions. Positive means drift toward the value; negative means drift away.</p>
+          <code>normalized_delta[v] = delta[v] / std(T0 abilities)</code>
+        </div>
+        <div class="metric-box">
+          <h3>Sign Consistency</h3>
+          <p>Fraction of conditions sharing the same drift sign for that value.</p>
+          <code>max(frac(normalized_delta &gt; 0), frac(normalized_delta &lt; 0))</code>
+        </div>
+        <div class="metric-box">
+          <h3>L2 Drift And Rank Correlation</h3>
+          <p>L2 drift measures total movement in the value vector. Rank correlation measures whether the ordering of values changed.</p>
+          <code>L2 = sqrt(sum_v delta[v]^2); rho = Spearman(rank_T0, rank_T1)</code>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Principal Findings</h2>
+      <div class="finding-grid">
+        <div class="finding">
+          <h3>Finding 1</h3>
+          <p><code>HHH</code> separates cleanly by cohort.</p>
+          <span class="value">Base + Instruct: harmlessness +1.67, honesty -1.52</span>
+          <p class="footnote">Top values: harmlessness +1.67 (consistency 100%), honesty -1.52 (consistency 100%), helpfulness -0.15 (consistency 62%)</p>
+        </div>
+        <div class="finding">
+          <h3>Finding 2</h3>
+          <p>The Tulu stack trends toward honesty in <code>HHH</code> with lower magnitude than Base + Instruct.</p>
+          <span class="value">Tulu stack: honesty +0.22, helpfulness -0.14</span>
+          <p class="footnote">Top values: honesty +0.22 (consistency 83%), helpfulness -0.14 (consistency 75%), harmlessness -0.08 (consistency 67%)</p>
+        </div>
+        <div class="finding">
+          <h3>Finding 3</h3>
+          <p><code>personalprotective</code> has a shared authenticity increase, but the rest of the directional pattern remains cohort-dependent.</p>
+          <span class="value">Base + Instruct: authenticity +1.24, compliance -1.29</span>
+          <p class="footnote">Top values: compliance -1.29 (consistency 100%), authenticity +1.24 (consistency 100%), autonomy +0.98 (consistency 75%)</p>
+        </div>
+        <div class="finding">
+          <h3>Finding 4</h3>
+          <p>DPO is the stability anchor in <code>HHH</code>; RLVR and DPO are the lowest-drift aligned methods in <code>personalprotective</code>.</p>
+          <span class="value">HHH DPO L2 0.104 | PP RLVR 0.654 | PP DPO 0.698</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>HHH Results</h2>
+      <p>
+        The <code>HHH</code> results do not support a single aligned-model attractor. Cohort-separated signed drift and per-model heatmaps both indicate
+        that Base + Instruct move toward <code>harmlessness</code>, whereas the Tulu stack trends toward <code>honesty</code>.
+      </p>
+      <div class="figure-grid">
+        <figure class="card"><a href="plots/cross_method/cohort_attractors_HHH.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/cohort_attractors_HHH.png" alt="Figure H1. Cohort-Specific Signed Drift"></a><figcaption><strong>Figure H1. Cohort-Specific Signed Drift</strong><span>Primary directional evidence for HHH. Signed normalized mean drift is separated by cohort rather than pooled across all aligned models.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/delta_heatmap_HHH.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/delta_heatmap_HHH.png" alt="Figure H2. Per-Model Mean Delta"></a><figcaption><strong>Figure H2. Per-Model Mean Delta</strong><span>Raw mean per-value deltas by model. The cohort split in Figure H1 is also visible at the model level.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/radar_panel_HHH_shared.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/radar_panel_HHH_shared.png" alt="Figure H3. Shared-Scale Radar Comparison"></a><figcaption><strong>Figure H3. Shared-Scale Radar Comparison</strong><span>Representative HHH radar panel for politics, 10 turns, rendered on a shared radial scale for cross-model comparison.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/radar_panel_HHH_local.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/radar_panel_HHH_local.png" alt="Figure H4. Within-Plot Radar Comparison"></a><figcaption><strong>Figure H4. Within-Plot Radar Comparison</strong><span>The same representative HHH slice rendered with local scaling to emphasize within-model shape changes.</span></figcaption></figure>
+      </div>
+      <table class="metrics"><thead><tr><th>Cohort</th><th>Value</th><th>Mean Norm Drift</th><th>Sign Consistency</th></tr></thead><tbody><tr><td>Base + Instruct</td><td>harmlessness</td><td>+1.672</td><td>100%</td></tr><tr><td>Base + Instruct</td><td>honesty</td><td>-1.521</td><td>100%</td></tr><tr><td>Base + Instruct</td><td>helpfulness</td><td>-0.151</td><td>62%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>honesty</td><td>+0.217</td><td>83%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>helpfulness</td><td>-0.139</td><td>75%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>harmlessness</td><td>-0.079</td><td>67%</td></tr></tbody></table>
+    </section>
+
+    <section class="section">
+      <h2>PersonalProtective Results</h2>
+      <p>
+        In <code>personalprotective</code>, both cohorts move toward <code>authenticity</code>, but they diverge on <code>harmlessness</code>,
+        <code>compliance</code>, <code>privacy</code>, and <code>responsibility</code>. Cohort-specific signed drift is therefore more informative than a pooled attractor view.
+      </p>
+      <div class="figure-grid">
+        <figure class="card"><a href="plots/cross_method/cohort_attractors_personalprotective.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/cohort_attractors_personalprotective.png" alt="Figure P1. Cohort-Specific Signed Drift"></a><figcaption><strong>Figure P1. Cohort-Specific Signed Drift</strong><span>Primary directional evidence for personalprotective. Shared movement toward authenticity remains visible after cohort separation.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/delta_heatmap_personalprotective.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/delta_heatmap_personalprotective.png" alt="Figure P2. Per-Model Mean Delta"></a><figcaption><strong>Figure P2. Per-Model Mean Delta</strong><span>Raw mean per-value deltas by model. Similarities within cohorts are visible, but models are not identical.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/radar_panel_personalprotective_shared.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/radar_panel_personalprotective_shared.png" alt="Figure P3. Shared-Scale Radar Comparison"></a><figcaption><strong>Figure P3. Shared-Scale Radar Comparison</strong><span>Representative personalprotective radar panel for philosophy, 10 turns, rendered on a shared radial scale for cross-model comparison.</span></figcaption></figure>
+        <figure class="card"><a href="plots/cross_method/radar_panel_personalprotective_local.png" target="_blank" rel="noopener noreferrer"><img src="plots/cross_method/radar_panel_personalprotective_local.png" alt="Figure P4. Within-Plot Radar Comparison"></a><figcaption><strong>Figure P4. Within-Plot Radar Comparison</strong><span>The same representative personalprotective slice rendered with local scaling to highlight within-model directional structure.</span></figcaption></figure>
+      </div>
+      <table class="metrics"><thead><tr><th>Cohort</th><th>Value</th><th>Mean Norm Drift</th><th>Sign Consistency</th></tr></thead><tbody><tr><td>Base + Instruct</td><td>compliance</td><td>-1.286</td><td>100%</td></tr><tr><td>Base + Instruct</td><td>authenticity</td><td>+1.240</td><td>100%</td></tr><tr><td>Base + Instruct</td><td>autonomy</td><td>+0.981</td><td>75%</td></tr><tr><td>Base + Instruct</td><td>harmlessness</td><td>-0.787</td><td>75%</td></tr><tr><td>Base + Instruct</td><td>responsibility</td><td>-0.662</td><td>75%</td></tr><tr><td>Base + Instruct</td><td>creativity</td><td>+0.414</td><td>75%</td></tr><tr><td>Base + Instruct</td><td>privacy</td><td>+0.100</td><td>62%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>responsibility</td><td>-0.645</td><td>83%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>harmlessness</td><td>+0.535</td><td>67%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>authenticity</td><td>+0.484</td><td>75%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>creativity</td><td>-0.383</td><td>83%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>autonomy</td><td>+0.315</td><td>75%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>privacy</td><td>-0.207</td><td>50%</td></tr><tr><td>Tulu SFT/DPO/RLVR</td><td>compliance</td><td>-0.099</td><td>67%</td></tr></tbody></table>
+    </section>
+
+    <section class="section">
+      <h2>Notes On Reading The Figures</h2>
+      <div class="note-grid">
+        <div class="note-box">
+          <h3>Sign Consistency</h3>
+          <p>A 100% sign consistency for <code>harmlessness</code> and <code>honesty</code> in <code>HHH</code> means those values moved in opposite directions in every included condition. The remaining value, <code>helpfulness</code>, absorbed the residual variation and therefore has lower consistency.</p>
+        </div>
+        <div class="note-box">
+          <h3>Shared vs Local Radar Scale</h3>
+          <p>The shared-scale radar panels support cross-model comparison. The locally scaled panels are intended to highlight within-model directional trends that can be visually compressed on a shared scale.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
