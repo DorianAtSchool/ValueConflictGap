@@ -34,9 +34,11 @@ from config import (
     VALUE_SETS,
     GENERIC_DOMAINS,
     TURN_COUNTS,
-    RESULTS_DIR,
+    RESULTS_DIR as _BASE_RESULTS_DIR,
     VALUE_SETS_DIR,
 )
+
+RESULTS_DIR = _BASE_RESULTS_DIR / "persona"
 
 import pandas as pd
 
@@ -330,7 +332,16 @@ def run():
     # --- Aggregate visualization ---
     log.info("Generating aggregate visualizations...")
     results_df = pd.DataFrame(all_results)
-    generate_all_plots(results_df)
+
+    # Patch visualize.RESULTS_DIR so plots go to results/persona/
+    import visualize as _viz
+    _orig_viz_dir = _viz.RESULTS_DIR
+    _viz.RESULTS_DIR = RESULTS_DIR
+    try:
+        generate_all_plots(results_df)
+    finally:
+        _viz.RESULTS_DIR = _orig_viz_dir
+
     results_df.to_csv(RESULTS_DIR / "all_results.csv", index=False)
     log.info(f"Done! {len(all_results)} conditions completed.")
 

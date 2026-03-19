@@ -214,7 +214,7 @@ python run_persona_experiment.py \
     --simulator-api-key $OPENAI_API_KEY
 ```
 
-Results: `results/`
+Results: `results/persona/`
 
 ## Validate Conversations
 
