@@ -45,7 +45,7 @@ class AnthropicUserSimulator(UserSimulator):
                 messages.append({"role": "user", "content": msg["content"]})
 
         if not messages:
-            messages = [{"role": "user", "content": "Start the conversation."}]
+            messages = [{"role": "user", "content": "Start the conversation. Remember: write a short, casual opening message like a real person would."}]
 
         response = self.client.messages.create(
             model=self.model,
@@ -92,7 +92,7 @@ class OpenAIUserSimulator(UserSimulator):
                 messages.append({"role": "user", "content": msg["content"]})
 
         if len(messages) == 1:
-            messages.append({"role": "user", "content": "Start the conversation."})
+            messages.append({"role": "user", "content": "Start the conversation. Remember: write a short, casual opening message like a real person would."})
 
         response = self.client.chat.completions.create(
             model=self.model,

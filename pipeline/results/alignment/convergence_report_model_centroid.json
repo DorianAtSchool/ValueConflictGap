@@ -1,14 +1,8 @@
 {
-  "HHH": {
-    "t0_mean_pairwise_distance": 0.3321662416245665,
-    "t1_mean_pairwise_distance": 0.3939492108663716,
-    "convergence_ratio": 1.1860001454080207,
-    "n_models": 4
-  },
   "personalprotective": {
-    "t0_mean_pairwise_distance": 0.9491563235136312,
-    "t1_mean_pairwise_distance": 0.8537774656132032,
-    "convergence_ratio": 0.8995119607407238,
+    "t0_mean_pairwise_distance": 0.4736686408860133,
+    "t1_mean_pairwise_distance": 0.4684476111148497,
+    "convergence_ratio": 0.9889774637362578,
     "n_models": 4
   }
 }
