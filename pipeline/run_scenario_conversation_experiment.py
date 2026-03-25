@@ -31,22 +31,23 @@ Usage
 -----
   # Quick test — one model, one value set, pair grouping:
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft \\
       --value-sets HHH \\
       --turn-counts 5 \\
       --num-scenarios 100 \\
       --simulator-api-key sk-ant-...
 
-  # Full run — pair grouping (recommended):
+  # Multiple models and stances in a single run:
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft llama-3 \\
+      --stances neutral pro_v1 pro_v2 \\
       --value-sets HHH personalprotective \\
       --turn-counts 5 10 \\
       --simulator-api-key sk-ant-...
 
   # Per-scenario (expensive, maximum signal):
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft \\
       --value-sets HHH \\
       --group-by scenario \\
       --turn-counts 5 \\
@@ -396,12 +397,17 @@ def run_experiment(
     group_by: str,
     turn_counts: list[int],
     num_scenarios: int,
-    stance: str,
+    stances: list[str],
     mode: str,
     judge_client,
     judge_model: str,
     log: logging.Logger,
 ) -> list[dict]:
+    """Run all (value_set × stance × num_turns) conditions for one model.
+
+    The model is loaded once and unloaded after all stances are done.
+    T0 probing is shared across stances (same baseline, no context).
+    """
     log.info(f"Loading model: {model_key} ({model_info['hf_id']})")
     model = AlignmentModel(
         model_info["hf_id"],
@@ -419,7 +425,7 @@ def run_experiment(
         if not dist_path.exists():
             save_json(dist_path, scenario_distribution_report(scenarios))
 
-        # --- T0: no context ---
+        # --- T0: no context — shared across all stances ---
         t0_cp = t0_checkpoint_path(model_key, value_set, mode)
         if t0_cp.exists():
             log.info("  T0 checkpoint exists, loading")
@@ -437,81 +443,84 @@ def run_experiment(
             save_json(t0_cp, {"outcomes": outcomes_t0.to_dict(orient="records")})
             log.info(f"  T0: {len(outcomes_t0)} outcomes")
 
-        # --- Generate / load per-group conversations ---
-        conversations = generate_group_conversations(
-            model=model,
-            model_key=model_key,
-            user_sim=user_sim,
-            scenarios=scenarios,
-            value_set=value_set,
-            group_by=group_by,
-            turn_counts=turn_counts,
-            stance=stance,
-            log=log,
-        )
+        for stance in stances:
+            log.info(f"  stance={stance}")
 
-        # --- T1: per-group probing ---
-        for num_turns in turn_counts:
-            outcomes_t1_by_group: dict[str, pd.DataFrame] = {}
-
-            for group_key, conv_by_turns in conversations.items():
-                t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
-                if t1_cp.exists():
-                    outcomes_t1_by_group[group_key] = pd.DataFrame(
-                        load_json(t1_cp)["outcomes"]
-                    )
-                    continue
-
-                context = conv_by_turns[num_turns]
-
-                # Determine which scenarios belong to this group
-                if group_by == "pair":
-                    v1, v2 = group_key.split("_vs_")
-                    group_scenarios = scenarios[
-                        (scenarios["value1"] == v1) & (scenarios["value2"] == v2)
-                    ]
-                else:
-                    sid = group_key
-                    if "scenario_id" in scenarios.columns:
-                        group_scenarios = scenarios[scenarios["scenario_id"].astype(str) == sid]
-                    else:
-                        group_scenarios = scenarios[scenarios.index.astype(str) == sid]
-
-                if group_scenarios.empty:
-                    continue
-
-                log.info(f"  T1 {group_key}/{num_turns}t (stance={stance}, mode={mode}): "
-                         f"{len(group_scenarios)} scenarios")
-                if mode == "openended":
-                    outcomes_t1 = probe_values_openended(
-                        model, model_key, group_scenarios,
-                        judge_client=judge_client, judge_model=judge_model, context=context,
-                    )
-                else:
-                    outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
-                save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
-                outcomes_t1_by_group[group_key] = outcomes_t1
-
-            # Analyze drift for this (value_set, num_turns) condition
-            result = analyze_pair_drift(
-                outcomes_t0=outcomes_t0,
-                outcomes_t1_by_group=outcomes_t1_by_group,
-                value_set=value_set,
+            # --- Generate / load per-group conversations ---
+            conversations = generate_group_conversations(
+                model=model,
                 model_key=model_key,
-                num_turns=num_turns,
+                user_sim=user_sim,
+                scenarios=scenarios,
+                value_set=value_set,
+                group_by=group_by,
+                turn_counts=turn_counts,
+                stance=stance,
                 log=log,
             )
-            if result:
-                result["stance"] = stance
-                result["mode"] = mode
-                all_results.append(result)
-                stance_tag = f"_{stance}" if stance != "neutral" else ""
-                mode_tag = f"_{mode}" if mode != "mcq" else ""
-                result_path = (
-                    RESULTS_DIR / "runs"
-                    / f"{model_key}_{value_set}_{num_turns}t{stance_tag}{mode_tag}.json"
+
+            # --- T1: per-group probing ---
+            for num_turns in turn_counts:
+                outcomes_t1_by_group: dict[str, pd.DataFrame] = {}
+
+                for group_key, conv_by_turns in conversations.items():
+                    t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
+                    if t1_cp.exists():
+                        outcomes_t1_by_group[group_key] = pd.DataFrame(
+                            load_json(t1_cp)["outcomes"]
+                        )
+                        continue
+
+                    context = conv_by_turns[num_turns]
+
+                    # Determine which scenarios belong to this group
+                    if group_by == "pair":
+                        v1, v2 = group_key.split("_vs_")
+                        group_scenarios = scenarios[
+                            (scenarios["value1"] == v1) & (scenarios["value2"] == v2)
+                        ]
+                    else:
+                        sid = group_key
+                        if "scenario_id" in scenarios.columns:
+                            group_scenarios = scenarios[scenarios["scenario_id"].astype(str) == sid]
+                        else:
+                            group_scenarios = scenarios[scenarios.index.astype(str) == sid]
+
+                    if group_scenarios.empty:
+                        continue
+
+                    log.info(f"  T1 {group_key}/{num_turns}t (stance={stance}, mode={mode}): "
+                             f"{len(group_scenarios)} scenarios")
+                    if mode == "openended":
+                        outcomes_t1 = probe_values_openended(
+                            model, model_key, group_scenarios,
+                            judge_client=judge_client, judge_model=judge_model, context=context,
+                        )
+                    else:
+                        outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
+                    save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
+                    outcomes_t1_by_group[group_key] = outcomes_t1
+
+                # Analyze drift for this (value_set, stance, num_turns) condition
+                result = analyze_pair_drift(
+                    outcomes_t0=outcomes_t0,
+                    outcomes_t1_by_group=outcomes_t1_by_group,
+                    value_set=value_set,
+                    model_key=model_key,
+                    num_turns=num_turns,
+                    log=log,
                 )
-                save_json(result_path, result)
+                if result:
+                    result["stance"] = stance
+                    result["mode"] = mode
+                    all_results.append(result)
+                    stance_tag = f"_{stance}" if stance != "neutral" else ""
+                    mode_tag = f"_{mode}" if mode != "mcq" else ""
+                    result_path = (
+                        RESULTS_DIR / "runs"
+                        / f"{model_key}_{value_set}_{num_turns}t{stance_tag}{mode_tag}.json"
+                    )
+                    save_json(result_path, result)
 
     model.unload()
     gc.collect()
@@ -588,8 +597,8 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "--model", type=str, default="tulu-3-sft",
-        help=f"Model key (default: tulu-3-sft). Available: {list(ALIGNMENT_MODELS.keys())}",
+        "--models", type=str, nargs="+", default=["tulu-3-sft"],
+        help=f"One or more model keys (default: tulu-3-sft). Available: {list(ALIGNMENT_MODELS.keys())}",
     )
     parser.add_argument(
         "--group-by", type=str, default="pair", choices=["pair", "scenario"],
@@ -624,13 +633,15 @@ def parse_args():
     parser.add_argument("--judge-api-key", type=str, default=None,
                         help="API key for the judge (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)")
 
-    # Conversation stance
+    # Conversation stance(s)
     parser.add_argument(
-        "--stance", type=str, default="neutral", choices=["neutral", "pro_v1", "pro_v2"],
+        "--stances", type=str, nargs="+", default=["neutral"],
+        choices=["neutral", "pro_v1", "pro_v2"],
         help=(
-            "neutral (default): simulator is genuinely conflicted. "
-            "pro_v1: simulator leans toward the first value and defends it. "
-            "pro_v2: simulator leans toward the second value and defends it. "
+            "One or more stances (default: neutral). "
+            "neutral: simulator is genuinely conflicted. "
+            "pro_v1: simulator leans toward the first value. "
+            "pro_v2: simulator leans toward the second value. "
             "v1/v2 are determined per-pair (the value1/value2 columns of the scenario CSV)."
         ),
     )
@@ -666,12 +677,14 @@ def main():
     )
     log = logging.getLogger(__name__)
     log.info(f"=== Scenario Conversation Experiment ===")
-    log.info(f"  model={args.model}, group_by={args.group_by}, mode={args.mode}, "
-             f"stance={args.stance}, value_sets={args.value_sets}, "
+    log.info(f"  models={args.models}, group_by={args.group_by}, mode={args.mode}, "
+             f"stances={args.stances}, value_sets={args.value_sets}, "
              f"turn_counts={args.turn_counts}, num_scenarios={args.num_scenarios}")
 
-    if args.model not in ALIGNMENT_MODELS:
-        log.error(f"Unknown model key: {args.model}. Available: {list(ALIGNMENT_MODELS.keys())}")
+    # Validate models
+    unknown_models = [m for m in args.models if m not in ALIGNMENT_MODELS]
+    if unknown_models:
+        log.error(f"Unknown model key(s): {unknown_models}. Available: {list(ALIGNMENT_MODELS.keys())}")
         sys.exit(1)
 
     # Validate value sets
@@ -689,7 +702,6 @@ def main():
             os.environ["OPENAI_API_KEY"] = args.simulator_api_key
 
     user_sim = build_user_simulator(args)
-    model_info = ALIGNMENT_MODELS[args.model]
 
     # Build judge client (open-ended mode only)
     judge_client = None
@@ -713,20 +725,25 @@ def main():
             judge_client = anthropic.Anthropic(api_key=judge_key)
         log.info(f"  Judge: {args.judge} / {args.judge_model}")
 
-    all_results = run_experiment(
-        model_key=args.model,
-        model_info=model_info,
-        user_sim=user_sim,
-        value_sets=args.value_sets,
-        group_by=args.group_by,
-        turn_counts=args.turn_counts,
-        num_scenarios=args.num_scenarios,
-        stance=args.stance,
-        mode=args.mode,
-        judge_client=judge_client,
-        judge_model=args.judge_model,
-        log=log,
-    )
+    # Run all models sequentially; load each model once, iterate stances inside
+    all_results = []
+    for model_key in args.models:
+        log.info(f"--- Model: {model_key} ---")
+        results = run_experiment(
+            model_key=model_key,
+            model_info=ALIGNMENT_MODELS[model_key],
+            user_sim=user_sim,
+            value_sets=args.value_sets,
+            group_by=args.group_by,
+            turn_counts=args.turn_counts,
+            num_scenarios=args.num_scenarios,
+            stances=args.stances,
+            mode=args.mode,
+            judge_client=judge_client,
+            judge_model=args.judge_model,
+            log=log,
+        )
+        all_results.extend(results)
 
     save_summary_csv(all_results, log)
     log.info("Generating plots...")
