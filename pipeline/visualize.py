@@ -374,6 +374,110 @@ def plot_scenario_drift_bars(result: dict, output_path: Path):
     plt.close()
 
 
+def plot_ranking_heatmap_single(result: dict, output_path: Path):
+    """Per-condition ranking heatmap: T0 vs T1 ranks as a 2-row matrix.
+
+    Rows = [T0, T1]; Columns = values; Cell = ordinal rank (1=highest priority).
+    Same colour scheme as the cross-condition ranking heatmap.
+    """
+    t0_list = result.get("ranking_t0", [])
+    t1_list = result.get("ranking_t1", [])
+    if not t0_list or not t1_list:
+        return
+
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list(
+        "rank_cmap", ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"]
+    )
+    t0d = _ranking_list_to_dict(t0_list)
+    t1d = _ranking_list_to_dict(t1_list)
+    values = sorted(set(t0d) | set(t1d))
+    n = len(values)
+
+    t0_ranks = _ability_to_rank_scenario(t0d)
+    t1_ranks = _ability_to_rank_scenario(t1d)
+    matrix = np.array([[t0_ranks.get(v, np.nan) for v in values],
+                       [t1_ranks.get(v, np.nan) for v in values]])
+
+    fig, ax = plt.subplots(figsize=(max(5, n * 1.1), 2.5))
+    ax.imshow(matrix, cmap=cmap, aspect="auto", vmin=1, vmax=n)
+    for ri, row in enumerate(matrix):
+        for ci, val in enumerate(row):
+            if not np.isnan(val):
+                tc = "white" if val > n * 0.6 else "black"
+                ax.text(ci, ri, f"{int(val)}", ha="center", va="center",
+                        fontsize=9, color=tc, fontweight="bold")
+
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(values, rotation=40, ha="right", fontsize=8)
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels(["T0 (baseline)", "T1 (post-conv)"], fontsize=9)
+    stance = result.get("stance", "neutral")
+    mode = result.get("mode", "mcq")
+    ax.set_title(
+        f"Value Rankings — {result['model']} / {result['value_set']} / "
+        f"{result['num_turns']}t / {stance} / {mode}\n"
+        "(rank 1 = highest BT ability; lighter = higher priority)",
+        fontsize=9,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_rank_shift_heatmap_single(result: dict, output_path: Path):
+    """Per-condition rank-shift heatmap: single row showing T1 rank − T0 rank per value.
+
+    Blue = value rose in priority (rank decreased), red = dropped.
+    """
+    t0_list = result.get("ranking_t0", [])
+    t1_list = result.get("ranking_t1", [])
+    if not t0_list or not t1_list:
+        return
+
+    t0d = _ranking_list_to_dict(t0_list)
+    t1d = _ranking_list_to_dict(t1_list)
+    values = sorted(set(t0d) | set(t1d))
+    n = len(values)
+
+    t0_ranks = _ability_to_rank_scenario(t0d)
+    t1_ranks = _ability_to_rank_scenario(t1d)
+    deltas = np.array([[t1_ranks.get(v, np.nan) - t0_ranks.get(v, np.nan) for v in values]])
+
+    max_abs = max(np.nanmax(np.abs(deltas)) if not np.all(np.isnan(deltas)) else 1, 1)
+
+    fig, ax = plt.subplots(figsize=(max(5, n * 1.1), 1.8))
+    im = ax.imshow(deltas, cmap="RdBu", aspect="auto", vmin=-max_abs, vmax=max_abs)
+    for ci, val in enumerate(deltas[0]):
+        if not np.isnan(val):
+            sign = "+" if val > 0 else ""
+            ax.text(ci, 0, f"{sign}{int(val)}", ha="center", va="center",
+                    fontsize=9, fontweight="bold")
+
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(values, rotation=40, ha="right", fontsize=8)
+    ax.set_yticks([])
+
+    stance = result.get("stance", "neutral")
+    mode = result.get("mode", "mcq")
+    ax.set_title(
+        f"Rank Shift (T1−T0) — {result['model']} / {result['value_set']} / "
+        f"{result['num_turns']}t / {stance} / {mode}\n"
+        "(blue = rose in priority, red = dropped)",
+        fontsize=9,
+    )
+
+    # Colorbar: dedicated axis to the right so it never overlaps the matrix
+    fig.subplots_adjust(right=0.85)
+    cax = fig.add_axes([0.87, 0.25, 0.025, 0.5])
+    fig.colorbar(im, cax=cax, label="Rank change")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
 def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Path):
     """Generate all plots for the scenario conversation experiment.
 
@@ -416,6 +520,9 @@ def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Pat
         plot_scenario_radar(r, cond_dir / "radar_t0_t1.png")
         plot_scenario_drift_bars(r, cond_dir / "drift_bars.png")
         plot_bt_ranking_bars(r, cond_dir / "bt_ranking_bars.png")
+        # Per-condition ranking and rank-shift heatmaps
+        plot_ranking_heatmap_single(r, cond_dir / "ranking_heatmap.png")
+        plot_rank_shift_heatmap_single(r, cond_dir / "rank_shift_heatmap.png")
 
     # --- Cross-condition plots ---
     plot_ranking_heatmap_scenario(all_results, plots_dir / "ranking_heatmap.png")
@@ -423,6 +530,9 @@ def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Pat
     plot_radar_panel_scenario(all_results, plots_dir / "radar_panel.png")
     plot_drift_by_turns_scenario(all_results, plots_dir / "drift_by_turns.png")
     plot_l2_heatmap_scenario(all_results, plots_dir / "l2_heatmap.png")
+    # Aggregated drift bars and per-value flip rates across all conditions
+    plot_aggregated_drift_bars(all_results, plots_dir / "aggregated_drift_bars.png")
+    plot_aggregated_per_value_flip_rate(all_results, plots_dir / "aggregated_per_value_flip_rates.png")
 
     stances_present = {r.get("stance", "neutral") for r in all_results}
     if len(stances_present) > 1:
@@ -696,7 +806,6 @@ def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path)
             ax.set_yticks(range(len(stances)))
             ax.set_yticklabels(stances, fontsize=9)
 
-        fig.colorbar(im, ax=axes, label="Rank change (−=rose, +=dropped)", shrink=0.8)
         model = records[0]["model"] if records else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
         fig.suptitle(
@@ -704,7 +813,10 @@ def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path)
             "(blue = value rose in priority, red = dropped)",
             fontsize=11, fontweight="bold", y=1.02,
         )
-        plt.tight_layout()
+        # Reserve right margin for colorbar so it never overlaps the matrix panels
+        fig.subplots_adjust(right=0.88)
+        cax = fig.add_axes([0.90, 0.15, 0.018, 0.65])
+        fig.colorbar(im, cax=cax, label="Rank change (−=rose, +=dropped)")
         out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -967,6 +1079,120 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
 
         mode_tag = f"_{mode}" if mode != "mcq" else ""
         out = output_path.parent / f"{output_path.stem}_{vs}_{turns}t{mode_tag}{output_path.suffix}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close()
+
+
+def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
+    """Cross-condition: per-value BT delta (T1−T0) averaged over all results.
+
+    One file per (value_set, mode).  Bars show mean delta; error bars = ±1 SD.
+    Blue = value rose on average, red = dropped.
+    """
+    if not all_results:
+        return
+
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+
+    for (vs, mode), records in groups.items():
+        # Collect per-value deltas across all records
+        value_deltas: dict[str, list[float]] = defaultdict(list)
+        for r in records:
+            for v, d in r.get("drift", {}).get("per_value_delta", {}).items():
+                value_deltas[v].append(d)
+
+        if not value_deltas:
+            continue
+
+        values = sorted(value_deltas, key=lambda v: np.mean(value_deltas[v]))
+        means = [np.mean(value_deltas[v]) for v in values]
+        sds = [np.std(value_deltas[v]) for v in values]
+        colors = ["steelblue" if m >= 0 else "tomato" for m in means]
+
+        fig, ax = plt.subplots(figsize=(7, max(3.5, len(values) * 0.55 + 1.0)))
+        ax.barh(values, means, xerr=sds, color=colors, alpha=0.85,
+                error_kw=dict(ecolor="black", capsize=3, linewidth=0.9))
+        ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
+        ax.set_xlabel("Mean BT score delta (T1 − T0)  ±1 SD")
+        model = records[0].get("model", "")
+        ax.set_title(
+            f"Aggregated Value Drift — {model} / {vs}"
+            f"{(' / ' + mode) if mode != 'mcq' else ''}\n"
+            f"({len(records)} condition{'s' if len(records) != 1 else ''})",
+            fontsize=10,
+        )
+
+        mode_tag = f"_{mode}" if mode != "mcq" else ""
+        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close()
+
+
+def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Path):
+    """Cross-condition: mean flip-toward / flip-away per value, averaged over all results.
+
+    One file per (value_set, mode).  Grouped bars; error bars = ±1 SD.
+    """
+    if not all_results:
+        return
+
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+
+    for (vs, mode), records in groups.items():
+        toward_all: dict[str, list[float]] = defaultdict(list)
+        away_all: dict[str, list[float]] = defaultdict(list)
+        for r in records:
+            for v, stats in r.get("per_value_flip_stats", {}).items():
+                toward_all[v].append(stats.get("flip_rate_toward", 0) or 0)
+                away_all[v].append(stats.get("flip_rate_away", 0) or 0)
+
+        all_values = sorted(toward_all.keys())
+        if not all_values:
+            continue
+
+        toward_means = [np.mean(toward_all[v]) for v in all_values]
+        toward_sds = [np.std(toward_all[v]) for v in all_values]
+        away_means = [np.mean(away_all[v]) for v in all_values]
+        away_sds = [np.std(away_all[v]) for v in all_values]
+
+        x = np.arange(len(all_values))
+        width = 0.35
+        ekw = dict(ecolor="black", capsize=3, linewidth=0.9)
+
+        fig, ax = plt.subplots(figsize=(max(7, len(all_values) * 0.9), 5))
+        bars_t = ax.bar(x - width / 2, toward_means, width, yerr=toward_sds,
+                        label="Flip toward", color="steelblue", alpha=0.85, error_kw=ekw)
+        bars_a = ax.bar(x + width / 2, away_means, width, yerr=away_sds,
+                        label="Flip away", color="tomato", alpha=0.85, error_kw=ekw)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(all_values, rotation=35, ha="right", fontsize=9)
+        ax.set_ylabel("Mean rate ±1 SD")
+        ax.set_ylim(0, max(max(toward_means + away_means, default=0) * 1.35, 0.05))
+        ax.bar_label(bars_t, fmt="%.2f", fontsize=7, padding=2)
+        ax.bar_label(bars_a, fmt="%.2f", fontsize=7, padding=2)
+        ax.legend()
+
+        model = records[0].get("model", "")
+        ax.set_title(
+            f"Aggregated Per-Value Flip Rates — {model} / {vs}"
+            f"{(' / ' + mode) if mode != 'mcq' else ''}\n"
+            f"({len(records)} condition{'s' if len(records) != 1 else ''})",
+            fontsize=10,
+        )
+
+        mode_tag = f"_{mode}" if mode != "mcq" else ""
+        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
