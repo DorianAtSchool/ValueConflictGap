@@ -86,8 +86,9 @@ from run_alignment_target_experiment import (
 )
 from config import VALUE_SETS_DIR
 from conversations import generate_conversation, make_scenario_conversation_prompt
-from probing import load_scenarios, probe_values, scenario_distribution_report
+from probing import load_scenarios, probe_values, probe_values_openended, scenario_distribution_report
 from analysis import fit_bradley_terry, compute_drift, compute_answer_flip_rate
+from visualize import generate_scenario_experiment_plots
 
 
 # ---------------------------------------------------------------------------
@@ -112,19 +113,34 @@ def load_json(path: Path):
         return json.load(f)
 
 
-def conv_checkpoint_path(model_key: str, value_set: str, group_key: str, num_turns: int) -> Path:
+def conv_checkpoint_path(
+    model_key: str, value_set: str, group_key: str, num_turns: int, stance: str = "neutral"
+) -> Path:
     """Path for a saved conversation (pair or scenario level)."""
     safe_key = group_key.replace(" ", "_").replace("/", "-")
-    return RESULTS_DIR / "conversations" / model_key / value_set / f"{safe_key}_{num_turns}t.json"
+    stance_tag = f"_{stance}" if stance != "neutral" else ""
+    return (
+        RESULTS_DIR / "conversations" / model_key / value_set
+        / f"{safe_key}_{num_turns}t{stance_tag}.json"
+    )
 
 
-def t0_checkpoint_path(model_key: str, value_set: str) -> Path:
-    return RESULTS_DIR / "checkpoints" / f"{model_key}_{value_set}_t0.json"
+def t0_checkpoint_path(model_key: str, value_set: str, mode: str = "mcq") -> Path:
+    mode_tag = f"_{mode}" if mode != "mcq" else ""
+    return RESULTS_DIR / "checkpoints" / f"{model_key}_{value_set}_t0{mode_tag}.json"
 
 
-def t1_checkpoint_path(model_key: str, value_set: str, group_key: str, num_turns: int) -> Path:
+def t1_checkpoint_path(
+    model_key: str, value_set: str, group_key: str, num_turns: int,
+    stance: str = "neutral", mode: str = "mcq",
+) -> Path:
     safe_key = group_key.replace(" ", "_").replace("/", "-")
-    return RESULTS_DIR / "checkpoints" / f"{model_key}_{value_set}_{safe_key}_{num_turns}t_t1.json"
+    stance_tag = f"_{stance}" if stance != "neutral" else ""
+    mode_tag = f"_{mode}" if mode != "mcq" else ""
+    return (
+        RESULTS_DIR / "checkpoints"
+        / f"{model_key}_{value_set}_{safe_key}_{num_turns}t_t1{stance_tag}{mode_tag}.json"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +167,7 @@ def generate_group_conversations(
     value_set: str,
     group_by: str,
     turn_counts: list[int],
+    stance: str,
     log: logging.Logger,
 ) -> dict[str, dict[int, list[dict]]]:
     """Generate and cache conversations for every group × turn count.
@@ -175,15 +192,20 @@ def generate_group_conversations(
 
     for group_key, group_df in groups.items():
         conversations[group_key] = {}
-        full_conv_path = conv_checkpoint_path(model_key, value_set, group_key, max_turns)
+        full_conv_path = conv_checkpoint_path(model_key, value_set, group_key, max_turns, stance)
 
         if full_conv_path.exists():
-            log.info(f"  Conv exists: {group_key} ({max_turns}t)")
+            log.info(f"  Conv exists: {group_key} ({max_turns}t, stance={stance})")
             full_conv = load_json(full_conv_path)
         else:
             seed = pick_seed_scenario(group_df)
-            sim_prompt = make_scenario_conversation_prompt(seed["description"])
-            log.info(f"  Generating conv: {group_key} ({max_turns}t)")
+            sim_prompt = make_scenario_conversation_prompt(
+                description=seed["description"],
+                stance=stance,
+                value1=seed.get("value1", ""),
+                value2=seed.get("value2", ""),
+            )
+            log.info(f"  Generating conv: {group_key} ({max_turns}t, stance={stance})")
             full_conv = generate_conversation(
                 model=model,
                 persona=model_key,
@@ -274,6 +296,54 @@ def analyze_pair_drift(
             "directional_consistency": float(consistency),
         }
 
+    # --- per-value flip stats ---
+    # For each value V, across ALL scenarios where V appeared (in any pair),
+    # count how many times the decision flipped toward V vs away from V.
+    # "flip toward V" = winner_t0 != V and winner_t1 == V
+    # "flip away from V" = winner_t0 == V and winner_t1 != V
+    all_values = sorted(set(outcomes_t0["value1"]) | set(outcomes_t0["value2"]))
+    per_value_flip_stats: dict[str, dict] = {}
+    for value in all_values:
+        total_appearances = 0
+        flips_toward = 0
+        flips_away = 0
+        for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
+            if value not in (v1, v2):
+                continue
+            pair_key = f"{v1}_vs_{v2}"
+            pair_t1 = outcomes_t1_by_group.get(pair_key)
+            if pair_t1 is None or pair_t1.empty:
+                continue
+            merged = pair_t0.merge(pair_t1, on="scenario_id", suffixes=("_t0", "_t1"))
+            if merged.empty:
+                continue
+            total_appearances += len(merged)
+            flipped = merged[merged["winner_t0"] != merged["winner_t1"]]
+            flips_toward += int(
+                ((flipped["winner_t0"] != value) & (flipped["winner_t1"] == value)).sum()
+            )
+            flips_away += int(
+                ((flipped["winner_t0"] == value) & (flipped["winner_t1"] != value)).sum()
+            )
+
+        n_flipped = flips_toward + flips_away
+        per_value_flip_stats[value] = {
+            "total_appearances": total_appearances,
+            "n_flipped": n_flipped,
+            "flips_toward": flips_toward,
+            "flips_away": flips_away,
+            "flip_rate_toward": (
+                flips_toward / total_appearances if total_appearances > 0 else float("nan")
+            ),
+            "flip_rate_away": (
+                flips_away / total_appearances if total_appearances > 0 else float("nan")
+            ),
+            "net_flip_rate": (
+                (flips_toward - flips_away) / total_appearances
+                if total_appearances > 0 else float("nan")
+            ),
+        }
+
     log.info(
         f"  {value_set}/{num_turns}t: "
         f"L2={drift['l2_distance']:.3f}, "
@@ -287,6 +357,20 @@ def analyze_pair_drift(
     if high_consistency:
         log.info(f"  High-consistency pairs (≥0.7): {high_consistency}")
 
+    # Log top movers by net flip rate
+    movers = sorted(
+        per_value_flip_stats.items(),
+        key=lambda kv: abs(kv[1]["net_flip_rate"]) if not np.isnan(kv[1]["net_flip_rate"]) else 0,
+        reverse=True,
+    )[:3]
+    for v, s in movers:
+        if not np.isnan(s["net_flip_rate"]):
+            log.info(
+                f"    {v}: toward={s['flip_rate_toward']:.2f}, "
+                f"away={s['flip_rate_away']:.2f}, net={s['net_flip_rate']:+.2f} "
+                f"(n={s['total_appearances']})"
+            )
+
     return {
         "model": model_key,
         "value_set": value_set,
@@ -296,6 +380,7 @@ def analyze_pair_drift(
         "drift": drift,
         "flip_stats": flip_stats,
         "pair_consistency": pair_consistency,
+        "per_value_flip_stats": per_value_flip_stats,
     }
 
 
@@ -311,6 +396,10 @@ def run_experiment(
     group_by: str,
     turn_counts: list[int],
     num_scenarios: int,
+    stance: str,
+    mode: str,
+    judge_client,
+    judge_model: str,
     log: logging.Logger,
 ) -> list[dict]:
     log.info(f"Loading model: {model_key} ({model_info['hf_id']})")
@@ -331,14 +420,20 @@ def run_experiment(
             save_json(dist_path, scenario_distribution_report(scenarios))
 
         # --- T0: no context ---
-        t0_cp = t0_checkpoint_path(model_key, value_set)
+        t0_cp = t0_checkpoint_path(model_key, value_set, mode)
         if t0_cp.exists():
             log.info("  T0 checkpoint exists, loading")
             t0_data = load_json(t0_cp)
             outcomes_t0 = pd.DataFrame(t0_data["outcomes"])
         else:
-            log.info("  Running T0 probing...")
-            outcomes_t0 = probe_values(model, model_key, scenarios, context=None)
+            log.info(f"  Running T0 probing ({mode})...")
+            if mode == "openended":
+                outcomes_t0 = probe_values_openended(
+                    model, model_key, scenarios,
+                    judge_client=judge_client, judge_model=judge_model, context=None,
+                )
+            else:
+                outcomes_t0 = probe_values(model, model_key, scenarios, context=None)
             save_json(t0_cp, {"outcomes": outcomes_t0.to_dict(orient="records")})
             log.info(f"  T0: {len(outcomes_t0)} outcomes")
 
@@ -351,6 +446,7 @@ def run_experiment(
             value_set=value_set,
             group_by=group_by,
             turn_counts=turn_counts,
+            stance=stance,
             log=log,
         )
 
@@ -359,7 +455,7 @@ def run_experiment(
             outcomes_t1_by_group: dict[str, pd.DataFrame] = {}
 
             for group_key, conv_by_turns in conversations.items():
-                t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns)
+                t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
                 if t1_cp.exists():
                     outcomes_t1_by_group[group_key] = pd.DataFrame(
                         load_json(t1_cp)["outcomes"]
@@ -384,8 +480,15 @@ def run_experiment(
                 if group_scenarios.empty:
                     continue
 
-                log.info(f"  T1 {group_key}/{num_turns}t: {len(group_scenarios)} scenarios")
-                outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
+                log.info(f"  T1 {group_key}/{num_turns}t (stance={stance}, mode={mode}): "
+                         f"{len(group_scenarios)} scenarios")
+                if mode == "openended":
+                    outcomes_t1 = probe_values_openended(
+                        model, model_key, group_scenarios,
+                        judge_client=judge_client, judge_model=judge_model, context=context,
+                    )
+                else:
+                    outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
                 save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
                 outcomes_t1_by_group[group_key] = outcomes_t1
 
@@ -399,9 +502,14 @@ def run_experiment(
                 log=log,
             )
             if result:
+                result["stance"] = stance
+                result["mode"] = mode
                 all_results.append(result)
+                stance_tag = f"_{stance}" if stance != "neutral" else ""
+                mode_tag = f"_{mode}" if mode != "mcq" else ""
                 result_path = (
-                    RESULTS_DIR / "runs" / f"{model_key}_{value_set}_{num_turns}t.json"
+                    RESULTS_DIR / "runs"
+                    / f"{model_key}_{value_set}_{num_turns}t{stance_tag}{mode_tag}.json"
                 )
                 save_json(result_path, result)
 
@@ -424,6 +532,8 @@ def save_summary_csv(all_results: list[dict], log: logging.Logger):
             "model": r["model"],
             "value_set": r["value_set"],
             "num_turns": r["num_turns"],
+            "stance": r.get("stance", "neutral"),
+            "mode": r.get("mode", "mcq"),
             "l2_distance": r["drift"]["l2_distance"],
             "rank_correlation": r["drift"]["rank_correlation"],
             "rank_correlation_pvalue": r["drift"]["rank_correlation_pvalue"],
@@ -434,6 +544,13 @@ def save_summary_csv(all_results: list[dict], log: logging.Logger):
         # Per-value delta columns
         for val, delta in r["drift"]["per_value_delta"].items():
             row[f"delta_{val}"] = delta
+
+        # Per-value flip rate columns
+        pvfs = r.get("per_value_flip_stats", {})
+        for val, stats in pvfs.items():
+            row[f"flip_toward_{val}"] = stats["flip_rate_toward"]
+            row[f"flip_away_{val}"] = stats["flip_rate_away"]
+            row[f"net_flip_{val}"] = stats["net_flip_rate"]
 
         # Summary stats over pair consistency
         pc = r.get("pair_consistency", {})
@@ -447,7 +564,6 @@ def save_summary_csv(all_results: list[dict], log: logging.Logger):
             row["mean_pair_consistency"] = float(np.mean(consistencies)) if consistencies else float("nan")
             row["max_pair_consistency"] = float(np.max(consistencies)) if consistencies else float("nan")
             row["mean_pair_flip_rate"] = float(np.mean(flip_rates)) if flip_rates else 0.0
-            # Count pairs with high directional consistency (≥0.7)
             row["n_high_consistency_pairs"] = int(
                 sum(1 for c in consistencies if c >= 0.7)
             )
@@ -491,6 +607,34 @@ def parse_args():
     parser.add_argument("--simulator-base-url", type=str, default=None)
     parser.add_argument("--simulator-api-key", type=str, default=None)
 
+    # Probing mode
+    parser.add_argument(
+        "--mode", type=str, default="mcq", choices=["mcq", "openended"],
+        help=(
+            "mcq (default): model picks A or B. "
+            "openended: model gives a free-form answer, a judge classifies it as A or B."
+        ),
+    )
+
+    # Judge (open-ended mode only)
+    parser.add_argument("--judge", type=str, default="openai", choices=["anthropic", "openai"],
+                        help="Judge provider for open-ended mode (default: openai)")
+    parser.add_argument("--judge-model", type=str, default="gpt-4o-mini",
+                        help="Judge model ID (default: gpt-4o-mini)")
+    parser.add_argument("--judge-api-key", type=str, default=None,
+                        help="API key for the judge (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)")
+
+    # Conversation stance
+    parser.add_argument(
+        "--stance", type=str, default="neutral", choices=["neutral", "pro_v1", "pro_v2"],
+        help=(
+            "neutral (default): simulator is genuinely conflicted. "
+            "pro_v1: simulator leans toward the first value and defends it. "
+            "pro_v2: simulator leans toward the second value and defends it. "
+            "v1/v2 are determined per-pair (the value1/value2 columns of the scenario CSV)."
+        ),
+    )
+
     # Experiment scope
     parser.add_argument(
         "--value-sets", type=str, nargs="+", default=["HHH", "personalprotective"],
@@ -522,9 +666,9 @@ def main():
     )
     log = logging.getLogger(__name__)
     log.info(f"=== Scenario Conversation Experiment ===")
-    log.info(f"  model={args.model}, group_by={args.group_by}, "
-             f"value_sets={args.value_sets}, turn_counts={args.turn_counts}, "
-             f"num_scenarios={args.num_scenarios}")
+    log.info(f"  model={args.model}, group_by={args.group_by}, mode={args.mode}, "
+             f"stance={args.stance}, value_sets={args.value_sets}, "
+             f"turn_counts={args.turn_counts}, num_scenarios={args.num_scenarios}")
 
     if args.model not in ALIGNMENT_MODELS:
         log.error(f"Unknown model key: {args.model}. Available: {list(ALIGNMENT_MODELS.keys())}")
@@ -547,6 +691,28 @@ def main():
     user_sim = build_user_simulator(args)
     model_info = ALIGNMENT_MODELS[args.model]
 
+    # Build judge client (open-ended mode only)
+    judge_client = None
+    if args.mode == "openended":
+        judge_key = args.judge_api_key
+        if args.judge == "openai":
+            if not judge_key:
+                judge_key = os.environ.get("OPENAI_API_KEY")
+            if not judge_key:
+                log.error("Open-ended mode requires an OpenAI API key (--judge-api-key or OPENAI_API_KEY)")
+                sys.exit(1)
+            from openai import OpenAI
+            judge_client = OpenAI(api_key=judge_key)
+        else:
+            if not judge_key:
+                judge_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not judge_key:
+                log.error("Open-ended mode requires an Anthropic API key (--judge-api-key or ANTHROPIC_API_KEY)")
+                sys.exit(1)
+            import anthropic
+            judge_client = anthropic.Anthropic(api_key=judge_key)
+        log.info(f"  Judge: {args.judge} / {args.judge_model}")
+
     all_results = run_experiment(
         model_key=args.model,
         model_info=model_info,
@@ -555,10 +721,20 @@ def main():
         group_by=args.group_by,
         turn_counts=args.turn_counts,
         num_scenarios=args.num_scenarios,
+        stance=args.stance,
+        mode=args.mode,
+        judge_client=judge_client,
+        judge_model=args.judge_model,
         log=log,
     )
 
     save_summary_csv(all_results, log)
+    log.info("Generating plots...")
+    try:
+        generate_scenario_experiment_plots(all_results, RESULTS_DIR)
+        log.info(f"Plots saved to {RESULTS_DIR / 'plots'}")
+    except Exception as e:
+        log.warning(f"Plot generation failed (non-fatal): {e}")
     log.info("Done.")
 
 
