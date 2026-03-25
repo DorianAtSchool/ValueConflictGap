@@ -234,3 +234,146 @@ def generate_all_plots(results_df: pd.DataFrame):
     plot_flip_rate_bars(results_df, plots_dir / "flip_rate_bars.png")
     plot_attractor_analysis(results_df, plots_dir / "attractor_analysis.png")
     plot_drift_by_turns(results_df, plots_dir / "drift_by_turns.png")
+
+
+# ---------------------------------------------------------------------------
+# Scenario conversation experiment plots
+# ---------------------------------------------------------------------------
+
+def plot_pair_consistency_heatmap(result: dict, output_path: Path):
+    """Heatmap of per-pair flip rate and directional consistency.
+
+    Rows = value pairs, two columns: flip_rate and directional_consistency.
+    """
+    pc = result.get("pair_consistency", {})
+    if not pc:
+        return
+
+    pairs = sorted(pc.keys())
+    flip_rates = [pc[p]["flip_rate"] for p in pairs]
+    consistencies = [
+        pc[p]["directional_consistency"] if not np.isnan(pc[p]["directional_consistency"]) else 0.0
+        for p in pairs
+    ]
+    dominant = [pc[p]["dominant_value"] for p in pairs]
+    # Short labels: "auto vs harm"
+    short = [p.replace("_vs_", " vs ") for p in pairs]
+
+    data = pd.DataFrame({
+        "flip_rate": flip_rates,
+        "directional_consistency": consistencies,
+    }, index=short)
+
+    fig, ax = plt.subplots(figsize=(5, max(4, len(pairs) * 0.4)))
+    sns.heatmap(
+        data, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
+        linewidths=0.5, ax=ax,
+    )
+    ax.set_title(
+        f"Pair Flip Stats — {result['model']} / {result['value_set']} / {result['num_turns']}t",
+        fontsize=10,
+    )
+    # Annotate dominant value per row
+    for i, dom in enumerate(dominant):
+        ax.text(2.05, i + 0.5, dom, va="center", fontsize=7, color="navy")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_per_value_flip_stats(result: dict, output_path: Path):
+    """Grouped bar chart: for each value, flip-toward-rate and flip-away-rate.
+
+    Answers: "in all scenarios where value X appeared, what % flipped
+    toward X and what % flipped away from X?"
+    """
+    pvfs = result.get("per_value_flip_stats", {})
+    if not pvfs:
+        return
+
+    values = sorted(pvfs.keys())
+    toward = [pvfs[v]["flip_rate_toward"] for v in values]
+    away = [pvfs[v]["flip_rate_away"] for v in values]
+
+    x = np.arange(len(values))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(max(7, len(values) * 0.8), 5))
+    bars_toward = ax.bar(x - width / 2, toward, width, label="Flip toward", color="steelblue")
+    bars_away = ax.bar(x + width / 2, away, width, label="Flip away", color="tomato")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(values, rotation=35, ha="right", fontsize=9)
+    ax.set_ylabel("Rate (out of all scenarios value appeared in)")
+    ax.set_ylim(0, max(max(toward + away, default=0) * 1.25, 0.05))
+    ax.set_title(
+        f"Per-Value Flip Rates — {result['model']} / {result['value_set']} / {result['num_turns']}t",
+        fontsize=10,
+    )
+    ax.legend()
+    ax.bar_label(bars_toward, fmt="%.2f", fontsize=7)
+    ax.bar_label(bars_away, fmt="%.2f", fontsize=7)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_scenario_radar(result: dict, output_path: Path):
+    """Radar (spider) chart comparing T0 vs T1 BT scores for a single result."""
+    ranking_t0 = pd.DataFrame(result["ranking_t0"])
+    ranking_t1 = pd.DataFrame(result["ranking_t1"])
+    if ranking_t0.empty or ranking_t1.empty:
+        return
+    title = f"{result['model']} — {result['value_set']} — {result['num_turns']}t"
+    plot_radar_t0_t1(ranking_t0, ranking_t1, title=title, output_path=output_path)
+
+
+def plot_scenario_drift_bars(result: dict, output_path: Path):
+    """Horizontal bar chart of per-value BT score delta (T1 - T0)."""
+    delta = result.get("drift", {}).get("per_value_delta", {})
+    if not delta:
+        return
+
+    values = sorted(delta.keys(), key=lambda v: delta[v])
+    deltas = [delta[v] for v in values]
+    colors = ["steelblue" if d >= 0 else "tomato" for d in deltas]
+
+    fig, ax = plt.subplots(figsize=(6, max(3, len(values) * 0.4)))
+    ax.barh(values, deltas, color=colors)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("BT score delta (T1 − T0)")
+    ax.set_title(
+        f"Value Drift — {result['model']} / {result['value_set']} / {result['num_turns']}t",
+        fontsize=10,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Path):
+    """Generate all plots for the scenario conversation experiment.
+
+    Called at the end of run_scenario_conversation_experiment.py.
+    Creates one sub-folder per (model, value_set, num_turns) condition.
+    """
+    if not all_results:
+        return
+
+    plots_dir = results_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    for r in all_results:
+        tag = f"{r['model']}_{r['value_set']}_{r['num_turns']}t"
+        cond_dir = plots_dir / tag
+        cond_dir.mkdir(parents=True, exist_ok=True)
+
+        plot_pair_consistency_heatmap(r, cond_dir / "pair_consistency.png")
+        plot_per_value_flip_stats(r, cond_dir / "per_value_flip_rates.png")
+        plot_scenario_radar(r, cond_dir / "radar_t0_t1.png")
+        plot_scenario_drift_bars(r, cond_dir / "drift_bars.png")
