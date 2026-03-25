@@ -651,13 +651,13 @@ def plot_ranking_heatmap_scenario(all_results: list[dict], output_path: Path):
     from matplotlib.colors import LinearSegmentedColormap
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+        groups[(r["model"], r["value_set"], r.get("mode", "mcq"))].append(r)
 
     cmap = LinearSegmentedColormap.from_list(
         "rank_cmap", ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"]
     )
 
-    for (vs, mode), records in groups.items():
+    for (model, vs, mode), records in groups.items():
         turn_counts = sorted({r["num_turns"] for r in records})
         stances = sorted({r.get("stance", "neutral") for r in records},
                          key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
@@ -721,7 +721,6 @@ def plot_ranking_heatmap_scenario(all_results: list[dict], output_path: Path):
                 ax.set_yticks(range(len(stances)))
                 ax.set_yticklabels(stances, fontsize=9)
 
-        model = records[0]["model"] if records else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
         fig.suptitle(
             f"Value Rankings — {model} / {vs}{(' / ' + mode) if mode != 'mcq' else ''}\n"
@@ -729,7 +728,7 @@ def plot_ranking_heatmap_scenario(all_results: list[dict], output_path: Path):
             fontsize=11, fontweight="bold", y=1.02,
         )
         plt.tight_layout()
-        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150, bbox_inches="tight")
         plt.close()
@@ -751,9 +750,9 @@ def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path)
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+        groups[(r["model"], r["value_set"], r.get("mode", "mcq"))].append(r)
 
-    for (vs, mode), records in groups.items():
+    for (model, vs, mode), records in groups.items():
         turn_counts = sorted({r["num_turns"] for r in records})
         stances = sorted({r.get("stance", "neutral") for r in records},
                          key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
@@ -806,7 +805,6 @@ def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path)
             ax.set_yticks(range(len(stances)))
             ax.set_yticklabels(stances, fontsize=9)
 
-        model = records[0]["model"] if records else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
         fig.suptitle(
             f"Value Rank Shifts from T0 — {model} / {vs}{(' / ' + mode) if mode != 'mcq' else ''}\n"
@@ -817,7 +815,7 @@ def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path)
         fig.subplots_adjust(right=0.88)
         cax = fig.add_axes([0.90, 0.15, 0.018, 0.65])
         fig.colorbar(im, cax=cax, label="Rank change (−=rose, +=dropped)")
-        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150, bbox_inches="tight")
         plt.close()
@@ -837,9 +835,9 @@ def plot_radar_panel_scenario(all_results: list[dict], output_path: Path):
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+        groups[(r["model"], r["value_set"], r.get("mode", "mcq"))].append(r)
 
-    for (vs, mode), records in groups.items():
+    for (model, vs, mode), records in groups.items():
         turn_counts = sorted({r["num_turns"] for r in records})
         stances = sorted({r.get("stance", "neutral") for r in records},
                          key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
@@ -876,7 +874,6 @@ def plot_radar_panel_scenario(all_results: list[dict], output_path: Path):
         angles = np.linspace(0, 2 * np.pi, len(values), endpoint=False).tolist()
         angles += angles[:1]
 
-        model = records[0]["model"] if records else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
 
         for scale_mode in ("shared", "local"):
@@ -926,7 +923,7 @@ def plot_radar_panel_scenario(all_results: list[dict], output_path: Path):
             )
             plt.tight_layout()
             out = (output_path.parent
-                   / f"{output_path.stem}_{vs}{mode_tag}_{scale_mode}{output_path.suffix}")
+                   / f"{output_path.stem}_{model}_{vs}{mode_tag}_{scale_mode}{output_path.suffix}")
             out.parent.mkdir(parents=True, exist_ok=True)
             plt.savefig(out, dpi=150, bbox_inches="tight")
             plt.close()
@@ -941,12 +938,12 @@ def plot_drift_by_turns_scenario(all_results: list[dict], output_path: Path):
         return
 
     from collections import defaultdict
-    # Group by (stance, mode)
+    # Group by (model, stance, mode)
     panels: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        panels[(r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
+        panels[(r["model"], r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
 
-    for (stance, mode), records in panels.items():
+    for (model, stance, mode), records in panels.items():
         df = pd.DataFrame([{
             "value_set": r["value_set"],
             "num_turns": r["num_turns"],
@@ -962,14 +959,14 @@ def plot_drift_by_turns_scenario(all_results: list[dict], output_path: Path):
 
         ax.set_xlabel("Number of Turns")
         ax.set_ylabel("L2 Drift (BT ability vector)")
-        ax.set_title(f"Drift vs Conversation Length — stance={stance}, mode={mode}")
+        ax.set_title(f"Drift vs Conversation Length — {model} / stance={stance}, mode={mode}")
         ax.legend(title="Value Set")
         turns = sorted(df["num_turns"].unique())
         ax.set_xticks(turns)
 
         stance_tag = f"_{stance}" if stance != "neutral" else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}{stance_tag}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}{stance_tag}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -987,9 +984,9 @@ def plot_l2_heatmap_scenario(all_results: list[dict], output_path: Path):
     from collections import defaultdict
     panels: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        panels[(r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
+        panels[(r["model"], r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
 
-    for (stance, mode), records in panels.items():
+    for (model, stance, mode), records in panels.items():
         rows = [{
             "value_set": r["value_set"],
             "num_turns": r["num_turns"],
@@ -1014,11 +1011,11 @@ def plot_l2_heatmap_scenario(all_results: list[dict], output_path: Path):
             except Exception:
                 ax.set_visible(False)
 
-        fig.suptitle(f"Drift Metrics — stance={stance}, mode={mode}", fontsize=11)
+        fig.suptitle(f"Drift Metrics — {model} / stance={stance}, mode={mode}", fontsize=11)
 
         stance_tag = f"_{stance}" if stance != "neutral" else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}{stance_tag}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}{stance_tag}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -1035,10 +1032,10 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        key = (r["value_set"], r["num_turns"], r.get("mode", "mcq"))
+        key = (r["model"], r["value_set"], r["num_turns"], r.get("mode", "mcq"))
         groups[key].append(r)
 
-    for (vs, turns, mode), records in groups.items():
+    for (model, vs, turns, mode), records in groups.items():
         if len({r.get("stance", "neutral") for r in records}) < 2:
             continue
 
@@ -1075,10 +1072,10 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
             ax.set_ylabel(ylabel)
             ax.legend(title="Stance", fontsize=8)
 
-        fig.suptitle(f"Stance Comparison — {vs} / {turns}t / {mode}", fontsize=10)
+        fig.suptitle(f"Stance Comparison — {model} / {vs} / {turns}t / {mode}", fontsize=10)
 
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}_{vs}_{turns}t{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}_{turns}t{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -1097,9 +1094,9 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+        groups[(r["model"], r["value_set"], r.get("mode", "mcq"))].append(r)
 
-    for (vs, mode), records in groups.items():
+    for (model, vs, mode), records in groups.items():
         # Collect per-value deltas across all records
         value_deltas: dict[str, list[float]] = defaultdict(list)
         for r in records:
@@ -1119,7 +1116,6 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
                 error_kw=dict(ecolor="black", capsize=3, linewidth=0.9))
         ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
         ax.set_xlabel("Mean BT score delta (T1 − T0)  ±1 SD")
-        model = records[0].get("model", "")
         ax.set_title(
             f"Aggregated Value Drift — {model} / {vs}"
             f"{(' / ' + mode) if mode != 'mcq' else ''}\n"
@@ -1128,7 +1124,7 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
         )
 
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -1146,9 +1142,9 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+        groups[(r["model"], r["value_set"], r.get("mode", "mcq"))].append(r)
 
-    for (vs, mode), records in groups.items():
+    for (model, vs, mode), records in groups.items():
         toward_all: dict[str, list[float]] = defaultdict(list)
         away_all: dict[str, list[float]] = defaultdict(list)
         for r in records:
@@ -1183,7 +1179,6 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
         ax.bar_label(bars_a, fmt="%.2f", fontsize=7, padding=2)
         ax.legend()
 
-        model = records[0].get("model", "")
         ax.set_title(
             f"Aggregated Per-Value Flip Rates — {model} / {vs}"
             f"{(' / ' + mode) if mode != 'mcq' else ''}\n"
@@ -1192,7 +1187,7 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
         )
 
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -1209,10 +1204,10 @@ def plot_mode_comparison(all_results: list[dict], output_path: Path):
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        key = (r["value_set"], r["num_turns"], r.get("stance", "neutral"))
+        key = (r["model"], r["value_set"], r["num_turns"], r.get("stance", "neutral"))
         groups[key].append(r)
 
-    for (vs, turns, stance), records in groups.items():
+    for (model, vs, turns, stance), records in groups.items():
         if len({r.get("mode", "mcq") for r in records}) < 2:
             continue
 
@@ -1248,9 +1243,9 @@ def plot_mode_comparison(all_results: list[dict], output_path: Path):
             ax.legend(title="Mode", fontsize=8)
 
         stance_tag = f"_{stance}" if stance != "neutral" else ""
-        fig.suptitle(f"MCQ vs Open-Ended — {vs} / {turns}t{stance_tag}", fontsize=10)
+        fig.suptitle(f"MCQ vs Open-Ended — {model} / {vs} / {turns}t{stance_tag}", fontsize=10)
 
-        out = output_path.parent / f"{output_path.stem}_{vs}_{turns}t{stance_tag}{output_path.suffix}"
+        out = output_path.parent / f"{output_path.stem}_{model}_{vs}_{turns}t{stance_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
