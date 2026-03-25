@@ -235,27 +235,28 @@ def analyze_pair_drift(
     model_key: str,
     num_turns: int,
     log: logging.Logger,
+    stance: str = "neutral",
 ) -> dict:
     """Compute per-pair flip consistency and overall Bradley-Terry drift.
 
     Per-pair directional consistency is the key new metric: for each value pair,
     after a conversation seeded by that pair, what fraction of flips go toward
     each value?  High consistency → the context reliably primes that value.
+
+    For non-neutral stances, per_value_flip_stats and role_filtered_drift only
+    count scenarios where each value was in the favored role:
+      - pro_v1: count value V only in pairs where V == value1
+      - pro_v2: count value V only in pairs where V == value2
+    This lets you see whether the stance actually moved the value it was
+    supposed to push, rather than diluting signal with unfavored-role appearances.
     """
     # --- overall T1: aggregate all per-group T1 outcomes ---
-    # Each group's scenarios were probed with their own context.
-    # We merge them all back into one dataframe to fit a global BT ranking.
-    all_t1_parts = []
-    for group_key, outcomes_t1 in outcomes_t1_by_group.items():
-        all_t1_parts.append(outcomes_t1)
+    all_t1_parts = list(outcomes_t1_by_group.values())
 
     if not all_t1_parts:
         return {}
 
     outcomes_t1_all = pd.concat(all_t1_parts, ignore_index=True)
-
-    # Deduplicate in case of overlapping scenario_ids (scenario grouping with
-    # multiple groups per scenario is not expected, but be safe).
     outcomes_t1_all = outcomes_t1_all.drop_duplicates(subset=["scenario_id"])
 
     ranking_t0 = fit_bradley_terry(outcomes_t0)
@@ -293,15 +294,13 @@ def analyze_pair_drift(
             "toward_v1": toward_v1,
             "toward_v2": toward_v2,
             "dominant_value": dominant,
-            # 1.0 = all flips went the same direction, 0.5 = random
             "directional_consistency": float(consistency),
         }
 
     # --- per-value flip stats ---
-    # For each value V, across ALL scenarios where V appeared (in any pair),
-    # count how many times the decision flipped toward V vs away from V.
-    # "flip toward V" = winner_t0 != V and winner_t1 == V
-    # "flip away from V" = winner_t0 == V and winner_t1 != V
+    # For non-neutral stances, restrict each value's stats to scenarios where
+    # it appeared in the "favored role" (v1 for pro_v1, v2 for pro_v2).
+    # For neutral, count all appearances (existing behaviour).
     all_values = sorted(set(outcomes_t0["value1"]) | set(outcomes_t0["value2"]))
     per_value_flip_stats: dict[str, dict] = {}
     for value in all_values:
@@ -310,6 +309,11 @@ def analyze_pair_drift(
         flips_away = 0
         for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
             if value not in (v1, v2):
+                continue
+            # Skip pairs where this value is NOT in the favored role
+            if stance == "pro_v1" and value != v1:
+                continue
+            if stance == "pro_v2" and value != v2:
                 continue
             pair_key = f"{v1}_vs_{v2}"
             pair_t1 = outcomes_t1_by_group.get(pair_key)
@@ -345,8 +349,45 @@ def analyze_pair_drift(
             ),
         }
 
+    # --- role-filtered BT drift (non-neutral stances only) ---
+    # For each value V, compute its BT ability delta using only outcomes from
+    # pairs where V was in the favored role.  This isolates the effect of the
+    # stance on the value it was designed to push.
+    role_filtered_per_value_delta: dict[str, float] = {}
+    if stance != "neutral":
+        role_col = "value1" if stance == "pro_v1" else "value2"
+        for target_value in sorted(set(outcomes_t0[role_col])):
+            # Collect T0 and T1 outcomes for pairs where target_value is in role
+            role_t0_parts = []
+            role_t1_parts = []
+            for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
+                if (stance == "pro_v1" and v1 != target_value) or \
+                   (stance == "pro_v2" and v2 != target_value):
+                    continue
+                pair_key = f"{v1}_vs_{v2}"
+                pair_t1 = outcomes_t1_by_group.get(pair_key)
+                if pair_t1 is None or pair_t1.empty:
+                    continue
+                role_t0_parts.append(pair_t0)
+                role_t1_parts.append(pair_t1)
+            if not role_t0_parts or not role_t1_parts:
+                continue
+            role_t0 = pd.concat(role_t0_parts, ignore_index=True)
+            role_t1 = pd.concat(role_t1_parts, ignore_index=True).drop_duplicates("scenario_id")
+            try:
+                rk_t0 = fit_bradley_terry(role_t0)
+                rk_t1 = fit_bradley_terry(role_t1)
+                ab_t0 = {row["value"]: row["ability"] for row in rk_t0.to_dict(orient="records")}
+                ab_t1 = {row["value"]: row["ability"] for row in rk_t1.to_dict(orient="records")}
+                if target_value in ab_t0 and target_value in ab_t1:
+                    role_filtered_per_value_delta[target_value] = float(
+                        ab_t1[target_value] - ab_t0[target_value]
+                    )
+            except Exception:
+                pass
+
     log.info(
-        f"  {value_set}/{num_turns}t: "
+        f"  {value_set}/{num_turns}t (stance={stance}): "
         f"L2={drift['l2_distance']:.3f}, "
         f"ρ={drift['rank_correlation']:.3f}, "
         f"flip={flip_stats['overall_flip_rate']:.3f}"
@@ -358,21 +399,25 @@ def analyze_pair_drift(
     if high_consistency:
         log.info(f"  High-consistency pairs (≥0.7): {high_consistency}")
 
-    # Log top movers by net flip rate
+    # Log top movers by net flip rate (using role-filtered stats for non-neutral stances)
     movers = sorted(
         per_value_flip_stats.items(),
         key=lambda kv: abs(kv[1]["net_flip_rate"]) if not np.isnan(kv[1]["net_flip_rate"]) else 0,
         reverse=True,
     )[:3]
+    role_note = "" if stance == "neutral" else f" [role-filtered for {stance}]"
     for v, s in movers:
         if not np.isnan(s["net_flip_rate"]):
             log.info(
-                f"    {v}: toward={s['flip_rate_toward']:.2f}, "
+                f"    {v}{role_note}: toward={s['flip_rate_toward']:.2f}, "
                 f"away={s['flip_rate_away']:.2f}, net={s['net_flip_rate']:+.2f} "
                 f"(n={s['total_appearances']})"
             )
+    if role_filtered_per_value_delta:
+        top_rf = sorted(role_filtered_per_value_delta.items(), key=lambda kv: abs(kv[1]), reverse=True)[:3]
+        log.info(f"  Role-filtered BT delta top movers: " + ", ".join(f"{v}={d:+.3f}" for v, d in top_rf))
 
-    return {
+    result = {
         "model": model_key,
         "value_set": value_set,
         "num_turns": num_turns,
@@ -383,6 +428,9 @@ def analyze_pair_drift(
         "pair_consistency": pair_consistency,
         "per_value_flip_stats": per_value_flip_stats,
     }
+    if role_filtered_per_value_delta:
+        result["role_filtered_drift"] = {"per_value_delta": role_filtered_per_value_delta}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +557,7 @@ def run_experiment(
                     model_key=model_key,
                     num_turns=num_turns,
                     log=log,
+                    stance=stance,
                 )
                 if result:
                     result["stance"] = stance
