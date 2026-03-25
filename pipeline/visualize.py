@@ -361,20 +361,21 @@ def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Pat
 
     Called at the end of run_scenario_conversation_experiment.py.
 
-    Per-condition plots (one per result record):
+    Per-condition plots (one sub-folder per model/value_set/turns/stance/mode):
       - radar_t0_t1.png           spider chart of BT scores before/after
       - bt_ranking_bars.png       absolute BT abilities T0 vs T1 with 95% CIs
       - drift_bars.png            per-value BT score delta bar chart
       - pair_consistency.png      heatmap: pairs × (flip_rate, directional_consistency)
       - per_value_flip_rates.png  grouped bars: flip-toward vs flip-away per value
 
-    Cross-condition plots (aggregated over all results):
-      - trajectories_pca.png      PCA arrows T0→T1, colored by num_turns
-      - drift_by_turns.png        L2 drift vs num_turns, faceted by value_set
-      - l2_heatmap.png            L2 drift heatmap: value_set × num_turns
-      - attractor.png             PCA of T1 vectors, colored by value_set
-      - stance_comparison.png     per-value flip-toward rate by stance (if >1 stance)
-      - mode_comparison.png       per-value flip-toward rate MCQ vs open-ended (if >1 mode)
+    Cross-condition plots (aggregated, one file per value_set/mode/stance):
+      - ranking_heatmap.png       panels T0/T1@5t/T1@10t…; rows=stances; cells=rank
+      - rank_shift_heatmap.png    rank delta from T0; same structure (blue=rose)
+      - radar_panel.png           one subplot per (num_turns × stance); T0 vs T1 overlay
+      - drift_by_turns.png        L2 drift vs num_turns, lines per value_set
+      - l2_heatmap.png            L2 drift + flip rate heatmap value_set × num_turns
+      - stance_comparison.png     flip-toward/away per value by stance (if >1 stance)
+      - mode_comparison.png       flip-toward/away per value MCQ vs open-ended (if >1 mode)
     """
     if not all_results:
         return
@@ -399,10 +400,11 @@ def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Pat
         plot_bt_ranking_bars(r, cond_dir / "bt_ranking_bars.png")
 
     # --- Cross-condition plots ---
-    plot_trajectories_pca_scenario(all_results, plots_dir / "trajectories_pca.png")
+    plot_ranking_heatmap_scenario(all_results, plots_dir / "ranking_heatmap.png")
+    plot_rank_shift_heatmap_scenario(all_results, plots_dir / "rank_shift_heatmap.png")
+    plot_radar_panel_scenario(all_results, plots_dir / "radar_panel.png")
     plot_drift_by_turns_scenario(all_results, plots_dir / "drift_by_turns.png")
     plot_l2_heatmap_scenario(all_results, plots_dir / "l2_heatmap.png")
-    plot_attractor_scenario(all_results, plots_dir / "attractor.png")
 
     stances_present = {r.get("stance", "neutral") for r in all_results}
     if len(stances_present) > 1:
@@ -420,6 +422,12 @@ def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Pat
 def _ranking_list_to_dict(ranking_list: list[dict]) -> dict[str, float]:
     """Convert [{value, ability, ...}, ...] to {value: ability}."""
     return {r["value"]: r["ability"] for r in ranking_list}
+
+
+def _ability_to_rank_scenario(ability_dict: dict[str, float]) -> dict[str, int]:
+    """Convert {value: ability} to {value: rank} (1 = highest ability)."""
+    sorted_vals = sorted(ability_dict, key=lambda v: ability_dict[v], reverse=True)
+    return {v: i + 1 for i, v in enumerate(sorted_vals)}
 
 
 def plot_bt_ranking_bars(result: dict, output_path: Path):
@@ -449,10 +457,10 @@ def plot_bt_ranking_bars(result: dict, output_path: Path):
     t0_ab = [t0.loc[v, "ability"] for v in common]
     t1_ab = [t1.loc[v, "ability"] for v in common]
 
-    bars_t0 = ax.barh(y - height / 2, t0_ab, height, label="T0 (no context)",
-                      color="steelblue", alpha=0.8)
-    bars_t1 = ax.barh(y + height / 2, t1_ab, height, label="T1 (post-conv)",
-                      color="darkorange", alpha=0.8)
+    ax.barh(y - height / 2, t0_ab, height, label="T0 (no context)",
+            color="steelblue", alpha=0.8)
+    ax.barh(y + height / 2, t1_ab, height, label="T1 (post-conv)",
+            color="darkorange", alpha=0.8)
 
     # 95% CIs
     for i, v in enumerate(common):
@@ -496,76 +504,302 @@ def plot_bt_ranking_bars(result: dict, output_path: Path):
 # Cross-condition plots
 # ---------------------------------------------------------------------------
 
-def plot_trajectories_pca_scenario(all_results: list[dict], output_path: Path):
-    """PCA trajectory arrows T0→T1 in value-space, colored by num_turns.
+def plot_ranking_heatmap_scenario(all_results: list[dict], output_path: Path):
+    """Value rank heatmap across context lengths — analogue of ranking_heatmap in alignment exp.
 
-    One plot per (value_set, stance, mode). Equivalent of plot_trajectories_pca
-    for the scenario experiment where the axis of variation is num_turns.
+    For each (value_set, mode) combination:
+      - Panels: T0 baseline + one panel per num_turns in results
+      - Rows: stances (or just the model name if only one stance)
+      - Columns: values
+      - Cell colour: rank (1=highest priority=lightest, N=lowest=darkest)
+      - Cell text: rank number
+
+    Mirrors the alignment experiment's Figure-4-style ranking_heatmap.
     """
     if not all_results:
         return
 
-    # Group by (value_set, stance, mode)
+    from collections import defaultdict
+    from matplotlib.colors import LinearSegmentedColormap
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+
+    cmap = LinearSegmentedColormap.from_list(
+        "rank_cmap", ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"]
+    )
+
+    for (vs, mode), records in groups.items():
+        turn_counts = sorted({r["num_turns"] for r in records})
+        stances = sorted({r.get("stance", "neutral") for r in records},
+                         key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
+                         if s in ["neutral", "pro_v1", "pro_v2"] else 99)
+
+        # Collect all values present
+        values = sorted({v for r in records
+                         for v in _ranking_list_to_dict(r["ranking_t0"]).keys()})
+        n_values = len(values)
+        if not values:
+            continue
+
+        panels = ["T0 (baseline)"] + [f"T1 @ {t}t" for t in turn_counts]
+        n_panels = len(panels)
+
+        fig, axes = plt.subplots(
+            1, n_panels,
+            figsize=(n_values * 1.3 * n_panels, len(stances) * 0.75 + 2),
+            sharey=True,
+        )
+        if n_panels == 1:
+            axes = [axes]
+
+        for panel_idx, (ax, label) in enumerate(zip(axes, panels)):
+            rank_matrix = np.full((len(stances), n_values), np.nan)
+            for si, stance in enumerate(stances):
+                if panel_idx == 0:
+                    # T0 — same for all turns; pick any record with this stance
+                    rec = next((r for r in records if r.get("stance", "neutral") == stance), None)
+                    if rec is None:
+                        continue
+                    abilities = _ranking_list_to_dict(rec["ranking_t0"])
+                else:
+                    nt = turn_counts[panel_idx - 1]
+                    rec = next(
+                        (r for r in records
+                         if r.get("stance", "neutral") == stance and r["num_turns"] == nt),
+                        None,
+                    )
+                    if rec is None:
+                        continue
+                    abilities = _ranking_list_to_dict(rec["ranking_t1"])
+
+                ranks = _ability_to_rank_scenario(abilities)
+                for j, v in enumerate(values):
+                    rank_matrix[si, j] = ranks.get(v, np.nan)
+
+            ax.imshow(rank_matrix, cmap=cmap, aspect="auto", vmin=1, vmax=n_values)
+            for si in range(len(stances)):
+                for j in range(n_values):
+                    val = rank_matrix[si, j]
+                    if not np.isnan(val):
+                        text_color = "white" if val > n_values * 0.6 else "black"
+                        ax.text(j, si, f"{int(val)}", ha="center", va="center",
+                                fontsize=9, color=text_color, fontweight="bold")
+
+            ax.set_xticks(range(n_values))
+            ax.set_xticklabels(values, rotation=45, ha="right", fontsize=8)
+            ax.set_title(label, fontsize=10, fontweight="bold")
+            if panel_idx == 0:
+                ax.set_yticks(range(len(stances)))
+                ax.set_yticklabels(stances, fontsize=9)
+
+        model = records[0]["model"] if records else ""
+        mode_tag = f"_{mode}" if mode != "mcq" else ""
+        fig.suptitle(
+            f"Value Rankings — {model} / {vs}{(' / ' + mode) if mode != 'mcq' else ''}\n"
+            "(rank 1 = highest BT ability; lighter = higher priority)",
+            fontsize=11, fontweight="bold", y=1.02,
+        )
+        plt.tight_layout()
+        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close()
+
+
+def plot_rank_shift_heatmap_scenario(all_results: list[dict], output_path: Path):
+    """Rank-change heatmap from T0 baseline — analogue of rank_shift_heatmap.
+
+    For each (value_set, mode):
+      - Panels: one per num_turns
+      - Rows: stances
+      - Columns: values
+      - Cell value: rank_T1 - rank_T0 (negative = value rose in priority)
+      - Color: blue = rose, red = dropped (RdBu diverging)
+    """
+    if not all_results:
+        return
+
     from collections import defaultdict
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in all_results:
-        key = (r["value_set"], r.get("stance", "neutral"), r.get("mode", "mcq"))
-        groups[key].append(r)
+        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
 
-    for (vs, stance, mode), records in groups.items():
-        t0_vecs, t1_vecs, turn_labels = [], [], []
-        for r in records:
-            t0d = _ranking_list_to_dict(r["ranking_t0"])
-            t1d = _ranking_list_to_dict(r["ranking_t1"])
-            vals = sorted(set(t0d) & set(t1d))
-            if not vals:
-                continue
-            t0_vecs.append([t0d[v] for v in vals])
-            t1_vecs.append([t1d[v] for v in vals])
-            turn_labels.append(r["num_turns"])
-
-        if len(t0_vecs) < 2:
+    for (vs, mode), records in groups.items():
+        turn_counts = sorted({r["num_turns"] for r in records})
+        stances = sorted({r.get("stance", "neutral") for r in records},
+                         key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
+                         if s in ["neutral", "pro_v1", "pro_v2"] else 99)
+        values = sorted({v for r in records
+                         for v in _ranking_list_to_dict(r["ranking_t0"]).keys()})
+        if not values or not turn_counts:
             continue
 
-        all_vecs = np.array(t0_vecs + t1_vecs)
-        n_comp = min(2, all_vecs.shape[1])
-        pca = PCA(n_components=n_comp)
-        proj = pca.fit_transform(all_vecs)
-        n = len(t0_vecs)
-        t0_proj, t1_proj = proj[:n], proj[n:]
+        n_values = len(values)
+        fig, axes = plt.subplots(
+            1, len(turn_counts),
+            figsize=(n_values * 1.3 * len(turn_counts), len(stances) * 0.75 + 2),
+            sharey=True,
+        )
+        if len(turn_counts) == 1:
+            axes = [axes]
 
-        unique_turns = sorted(set(turn_labels))
-        cmap = plt.cm.viridis(np.linspace(0.2, 0.9, max(len(unique_turns), 1)))
-        turn_color = {t: cmap[i] for i, t in enumerate(unique_turns)}
+        for ax, nt in zip(axes, turn_counts):
+            delta_matrix = np.full((len(stances), n_values), np.nan)
+            for si, stance in enumerate(stances):
+                t0_rec = next((r for r in records if r.get("stance", "neutral") == stance), None)
+                t1_rec = next(
+                    (r for r in records
+                     if r.get("stance", "neutral") == stance and r["num_turns"] == nt),
+                    None,
+                )
+                if t0_rec is None or t1_rec is None:
+                    continue
+                t0_ranks = _ability_to_rank_scenario(_ranking_list_to_dict(t0_rec["ranking_t0"]))
+                t1_ranks = _ability_to_rank_scenario(_ranking_list_to_dict(t1_rec["ranking_t1"]))
+                for j, v in enumerate(values):
+                    if v in t0_ranks and v in t1_ranks:
+                        delta_matrix[si, j] = t1_ranks[v] - t0_ranks[v]
 
-        fig, ax = plt.subplots(figsize=(9, 7))
-        for i in range(n):
-            c = turn_color[turn_labels[i]]
-            ax.annotate(
-                "",
-                xy=t1_proj[i], xytext=t0_proj[i],
-                arrowprops=dict(arrowstyle="->", color=c, lw=2),
-            )
-            ax.scatter(*t0_proj[i], c=[c], marker="o", s=60, zorder=5)
-            ax.scatter(*t1_proj[i], c=[c], marker="s", s=60, zorder=5)
+            max_abs = max(np.nanmax(np.abs(delta_matrix)) if not np.all(np.isnan(delta_matrix)) else 1, 1)
+            im = ax.imshow(delta_matrix, cmap="RdBu", aspect="auto",
+                           vmin=-max_abs, vmax=max_abs)
+            for si in range(len(stances)):
+                for j in range(n_values):
+                    val = delta_matrix[si, j]
+                    if not np.isnan(val):
+                        sign = "+" if val > 0 else ""
+                        ax.text(j, si, f"{sign}{int(val)}", ha="center", va="center",
+                                fontsize=9, fontweight="bold")
 
-        for t in unique_turns:
-            ax.scatter([], [], c=[turn_color[t]], marker="o", label=f"{t} turns")
-        ax.scatter([], [], marker="o", c="gray", label="T0", s=60)
-        ax.scatter([], [], marker="s", c="gray", label="T1", s=60)
-        ax.legend(title="Turns", fontsize=8)
-        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})")
-        if n_comp > 1:
-            ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})")
-        ax.set_title(f"Value Space Trajectories — {vs} / {stance} / {mode}")
+            ax.set_xticks(range(n_values))
+            ax.set_xticklabels(values, rotation=45, ha="right", fontsize=8)
+            ax.set_title(f"Rank change after {nt}t", fontsize=10, fontweight="bold")
+            ax.set_yticks(range(len(stances)))
+            ax.set_yticklabels(stances, fontsize=9)
 
-        stance_tag = f"_{stance}" if stance != "neutral" else ""
+        fig.colorbar(im, ax=axes, label="Rank change (−=rose, +=dropped)", shrink=0.8)
+        model = records[0]["model"] if records else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}_{vs}{stance_tag}{mode_tag}{output_path.suffix}"
-        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.suptitle(
+            f"Value Rank Shifts from T0 — {model} / {vs}{(' / ' + mode) if mode != 'mcq' else ''}\n"
+            "(blue = value rose in priority, red = dropped)",
+            fontsize=11, fontweight="bold", y=1.02,
+        )
         plt.tight_layout()
+        out = output_path.parent / f"{output_path.stem}_{vs}{mode_tag}{output_path.suffix}"
+        out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150, bbox_inches="tight")
         plt.close()
+
+
+def plot_radar_panel_scenario(all_results: list[dict], output_path: Path):
+    """Multi-panel radar chart — analogue of radar_panel_*_shared/local.png.
+
+    For each (value_set, mode): one subplot per (num_turns × stance) condition,
+    each showing T0 vs T1 overlay on the same radar axes.
+
+    Produces both shared-scale and local-scale variants.
+    """
+    if not all_results:
+        return
+
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["value_set"], r.get("mode", "mcq"))].append(r)
+
+    for (vs, mode), records in groups.items():
+        turn_counts = sorted({r["num_turns"] for r in records})
+        stances = sorted({r.get("stance", "neutral") for r in records},
+                         key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
+                         if s in ["neutral", "pro_v1", "pro_v2"] else 99)
+        values = sorted({v for r in records
+                         for v in _ranking_list_to_dict(r["ranking_t0"]).keys()})
+        if not values:
+            continue
+
+        # Build a flat list of (subplot_label, t0_dict, t1_dict)
+        subplots = []
+        for nt in turn_counts:
+            for stance in stances:
+                rec = next(
+                    (r for r in records
+                     if r["num_turns"] == nt and r.get("stance", "neutral") == stance),
+                    None,
+                )
+                if rec is None:
+                    continue
+                label = f"{nt}t / {stance}" if len(stances) > 1 else f"{nt} turns"
+                subplots.append((
+                    label,
+                    _ranking_list_to_dict(rec["ranking_t0"]),
+                    _ranking_list_to_dict(rec["ranking_t1"]),
+                ))
+
+        if not subplots:
+            continue
+
+        n = len(subplots)
+        n_cols = min(3, n)
+        n_rows = (n + n_cols - 1) // n_cols
+        angles = np.linspace(0, 2 * np.pi, len(values), endpoint=False).tolist()
+        angles += angles[:1]
+
+        model = records[0]["model"] if records else ""
+        mode_tag = f"_{mode}" if mode != "mcq" else ""
+
+        for scale_mode in ("shared", "local"):
+            # Global shift so all scores > 0 for radar display
+            if scale_mode == "shared":
+                all_ab = [a for _, t0d, t1d in subplots
+                          for a in list(t0d.values()) + list(t1d.values())]
+                global_min = min(all_ab) if all_ab else 0
+                global_shift = max(-global_min + 0.1, 0)
+
+            fig, axes = plt.subplots(
+                n_rows, n_cols,
+                figsize=(5 * n_cols, 5 * n_rows),
+                subplot_kw=dict(polar=True),
+            )
+            axes_flat = np.atleast_1d(axes).flatten()
+
+            for idx, (label, t0d, t1d) in enumerate(subplots):
+                ax = axes_flat[idx]
+                if scale_mode == "local":
+                    local_min = min(min(t0d.values()), min(t1d.values()))
+                    shift = max(-local_min + 0.1, 0)
+                else:
+                    shift = global_shift
+
+                t0_scores = [t0d.get(v, 0) + shift for v in values] + [t0d.get(values[0], 0) + shift]
+                t1_scores = [t1d.get(v, 0) + shift for v in values] + [t1d.get(values[0], 0) + shift]
+
+                ax.plot(angles, t0_scores, "o-", color="#4477AA", label="T0", linewidth=1.5, markersize=3)
+                ax.plot(angles, t1_scores, "s--", color="#CC6677", label="T1", linewidth=1.5, markersize=3)
+                ax.fill(angles, t0_scores, alpha=0.08, color="#4477AA")
+                ax.fill(angles, t1_scores, alpha=0.08, color="#CC6677")
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(values, size=7)
+                ax.set_title(label, size=10, pad=12)
+                if idx == 0:
+                    ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.2), fontsize=7)
+
+            for idx in range(n, n_rows * n_cols):
+                axes_flat[idx].set_visible(False)
+
+            scale_label = "shared-scale" if scale_mode == "shared" else "local-scale"
+            fig.suptitle(
+                f"BT Rankings T0 vs T1 — {model} / {vs}{(' / ' + mode) if mode != 'mcq' else ''} "
+                f"({scale_label})",
+                fontsize=11, fontweight="bold", y=1.02,
+            )
+            plt.tight_layout()
+            out = (output_path.parent
+                   / f"{output_path.stem}_{vs}{mode_tag}_{scale_mode}{output_path.suffix}")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close()
 
 
 def plot_drift_by_turns_scenario(all_results: list[dict], output_path: Path):
@@ -651,77 +885,6 @@ def plot_l2_heatmap_scenario(all_results: list[dict], output_path: Path):
                 ax.set_visible(False)
 
         fig.suptitle(f"Drift Metrics — stance={stance}, mode={mode}", fontsize=11)
-
-        stance_tag = f"_{stance}" if stance != "neutral" else ""
-        mode_tag = f"_{mode}" if mode != "mcq" else ""
-        out = output_path.parent / f"{output_path.stem}{stance_tag}{mode_tag}{output_path.suffix}"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        plt.tight_layout()
-        plt.savefig(out, dpi=150, bbox_inches="tight")
-        plt.close()
-
-
-def plot_attractor_scenario(all_results: list[dict], output_path: Path):
-    """Cluster T1 BT vectors in PCA space; colored by value_set.
-
-    One plot per (stance, mode). Equivalent of plot_attractor_analysis.
-    """
-    if len(all_results) < 3:
-        return
-
-    from collections import defaultdict
-    panels: dict[tuple, list[dict]] = defaultdict(list)
-    for r in all_results:
-        panels[(r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
-
-    for (stance, mode), records in panels.items():
-        t1_vecs, labels = [], []
-        for r in records:
-            t1d = _ranking_list_to_dict(r["ranking_t1"])
-            vals = sorted(t1d)
-            t1_vecs.append([t1d[v] for v in vals])
-            labels.append(f"{r['value_set']} / {r['num_turns']}t")
-
-        if len(t1_vecs) < 3:
-            continue
-
-        arr = np.array(t1_vecs)
-        n_comp = min(2, arr.shape[1])
-        pca = PCA(n_components=n_comp)
-        proj = pca.fit_transform(arr)
-
-        n_clusters = min(4, len(proj))
-        km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
-        cluster_ids = km.fit_predict(proj)
-
-        value_sets = [r["value_set"] for r in records]
-        unique_vs = sorted(set(value_sets))
-        cmap = plt.cm.tab10(np.linspace(0, 1, max(len(unique_vs), 1)))
-        vs_color = {vs: cmap[i] for i, vs in enumerate(unique_vs)}
-
-        fig, ax = plt.subplots(figsize=(10, 7))
-        for i, label in enumerate(labels):
-            vs = records[i]["value_set"]
-            ax.scatter(
-                proj[i, 0], proj[i, 1] if n_comp > 1 else 0,
-                c=[vs_color[vs]], s=70, zorder=5,
-            )
-            ax.annotate(str(records[i]["num_turns"]) + "t",
-                        (proj[i, 0], proj[i, 1] if n_comp > 1 else 0),
-                        fontsize=7, alpha=0.7)
-
-        ax.scatter(
-            km.cluster_centers_[:, 0],
-            km.cluster_centers_[:, 1] if n_comp > 1 else np.zeros(n_clusters),
-            marker="*", s=250, c="red", label="Centroids", zorder=10,
-        )
-        for vs in unique_vs:
-            ax.scatter([], [], c=[vs_color[vs]], label=vs)
-        ax.legend(title="Value Set", fontsize=8)
-        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})")
-        if n_comp > 1:
-            ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})")
-        ax.set_title(f"T1 Attractor Analysis — stance={stance}, mode={mode}")
 
         stance_tag = f"_{stance}" if stance != "neutral" else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
