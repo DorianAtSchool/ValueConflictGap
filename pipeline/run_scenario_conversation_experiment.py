@@ -413,6 +413,50 @@ def analyze_pair_drift(
                 f"away={s['flip_rate_away']:.2f}, net={s['net_flip_rate']:+.2f} "
                 f"(n={s['total_appearances']})"
             )
+    # --- per-value flip stats (all appearances — never role-filtered) ---
+    # Computed unconditionally so plots can show overall vs. role-filtered side
+    # by side even for non-neutral stances.
+    per_value_flip_stats_overall: dict[str, dict] = {}
+    for value in all_values:
+        total_appearances = 0
+        flips_toward = 0
+        flips_away = 0
+        for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
+            if value not in (v1, v2):
+                continue
+            pair_key = f"{v1}_vs_{v2}"
+            pair_t1 = outcomes_t1_by_group.get(pair_key)
+            if pair_t1 is None or pair_t1.empty:
+                continue
+            merged = pair_t0.merge(pair_t1, on="scenario_id", suffixes=("_t0", "_t1"))
+            if merged.empty:
+                continue
+            total_appearances += len(merged)
+            flipped = merged[merged["winner_t0"] != merged["winner_t1"]]
+            flips_toward += int(
+                ((flipped["winner_t0"] != value) & (flipped["winner_t1"] == value)).sum()
+            )
+            flips_away += int(
+                ((flipped["winner_t0"] == value) & (flipped["winner_t1"] != value)).sum()
+            )
+        n_flipped = flips_toward + flips_away
+        per_value_flip_stats_overall[value] = {
+            "total_appearances": total_appearances,
+            "n_flipped": n_flipped,
+            "flips_toward": flips_toward,
+            "flips_away": flips_away,
+            "flip_rate_toward": (
+                flips_toward / total_appearances if total_appearances > 0 else float("nan")
+            ),
+            "flip_rate_away": (
+                flips_away / total_appearances if total_appearances > 0 else float("nan")
+            ),
+            "net_flip_rate": (
+                (flips_toward - flips_away) / total_appearances
+                if total_appearances > 0 else float("nan")
+            ),
+        }
+
     if role_filtered_per_value_delta:
         top_rf = sorted(role_filtered_per_value_delta.items(), key=lambda kv: abs(kv[1]), reverse=True)[:3]
         log.info(f"  Role-filtered BT delta top movers: " + ", ".join(f"{v}={d:+.3f}" for v, d in top_rf))
@@ -426,7 +470,10 @@ def analyze_pair_drift(
         "drift": drift,
         "flip_stats": flip_stats,
         "pair_consistency": pair_consistency,
+        # role-filtered (or same as overall for neutral stance)
         "per_value_flip_stats": per_value_flip_stats,
+        # always unfiltered — all pairs, all appearances
+        "per_value_flip_stats_overall": per_value_flip_stats_overall,
     }
     if role_filtered_per_value_delta:
         result["role_filtered_drift"] = {"per_value_delta": role_filtered_per_value_delta}
@@ -714,6 +761,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    from datetime import datetime
+    run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -797,8 +846,8 @@ def main():
     save_summary_csv(all_results, log)
     log.info("Generating plots...")
     try:
-        generate_scenario_experiment_plots(all_results, RESULTS_DIR)
-        log.info(f"Plots saved to {RESULTS_DIR / 'plots'}")
+        generate_scenario_experiment_plots(all_results, RESULTS_DIR, run_id=run_id)
+        log.info(f"Plots saved to {RESULTS_DIR / 'plots' / run_id}")
     except Exception as e:
         log.warning(f"Plot generation failed (non-fatal): {e}")
     log.info("Done.")

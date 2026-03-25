@@ -243,8 +243,14 @@ def generate_all_plots(results_df: pd.DataFrame):
 def plot_pair_consistency_heatmap(result: dict, output_path: Path):
     """Heatmap of per-pair flip rate and directional consistency.
 
-    Rows = value pairs, two columns: flip_rate and directional_consistency.
-    A third text column shows the dominant value (the value that flips were toward).
+    Rows = value pairs (with scenario count), columns: flip_rate and
+    directional_consistency.  A text column on the right shows the dominant
+    value (i.e. the value toward which flips went).
+
+    flip_rate        — fraction of scenarios that changed answer T0→T1
+    dir. consistency — 1.0 = all flips same direction; 0.5 = random
+    dominant         — the value that received more flips in this pair
+    n                — number of scenarios in this pair (sample size)
     """
     pc = result.get("pair_consistency", {})
     if not pc:
@@ -257,35 +263,38 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
         for p in pairs
     ]
     dominant = [pc[p]["dominant_value"] for p in pairs]
-    short = [p.replace("_vs_", " vs ") for p in pairs]
+    # Include n_scenarios in row labels so sample size is always visible
+    short = [
+        f"{p.replace('_vs_', ' vs ')}  (n={pc[p]['n_scenarios']})"
+        for p in pairs
+    ]
 
     data = pd.DataFrame({
-        "flip_rate": flip_rates,
+        "flip rate": flip_rates,
         "dir. consistency": consistencies,
     }, index=short)
 
     row_height = 0.6
-    fig, ax = plt.subplots(figsize=(7, max(3.5, len(pairs) * row_height + 1.5)))
+    fig, ax = plt.subplots(figsize=(8, max(3.5, len(pairs) * row_height + 1.5)))
 
-    # cbar=False: all cells are annotated, colorbar just competes with the
-    # dominant-value text column we draw to the right.
     sns.heatmap(
         data, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
         linewidths=0.5, ax=ax, cbar=False,
     )
+    stance = result.get("stance", "neutral")
+    mode   = result.get("mode", "mcq")
     ax.set_title(
-        f"Pair Flip Stats — {result['model']} / {result['value_set']} / {result['num_turns']}t",
+        f"Pair Consistency — {result['model']} · {result['value_set']} · "
+        f"{stance} · {result['num_turns']} turns"
+        + (f" · {mode}" if mode != "mcq" else ""),
         fontsize=10, pad=10,
     )
     ax.set_ylabel("")
 
-    # Dominant-value column: placed in figure coords to avoid axes-clip issues.
-    # We compute the axes bbox after drawing, then position text just outside it.
     fig.canvas.draw()
-    ax_pos = ax.get_position()   # normalised figure coordinates
+    ax_pos = ax.get_position()
     n = len(pairs)
     for i, dom in enumerate(dominant):
-        # y: map row centre (top-to-bottom) to figure coords
         row_frac = (i + 0.5) / n
         fig_y = ax_pos.y1 - row_frac * ax_pos.height
         fig.text(
@@ -294,48 +303,77 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
             transform=fig.transFigure,
         )
 
-    # Leave right margin so the dominant-value text isn't clipped
-    fig.subplots_adjust(right=0.72)
+    fig.subplots_adjust(right=0.68)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
 
-def plot_per_value_flip_stats(result: dict, output_path: Path):
-    """Grouped bar chart: for each value, flip-toward-rate and flip-away-rate.
+def _flip_bars(ax, values, pvfs, title):
+    """Draw a flip-toward / flip-away grouped bar chart on *ax*."""
+    def _s(x):
+        return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
 
-    Answers: "in all scenarios where value X appeared, what % flipped
-    toward X and what % flipped away from X?"
-    """
-    pvfs = result.get("per_value_flip_stats", {})
-    if not pvfs:
-        return
-
-    values = sorted(pvfs.keys())
-    toward = [pvfs[v]["flip_rate_toward"] for v in values]
-    away = [pvfs[v]["flip_rate_away"] for v in values]
-    # Replace NaN (can occur when total_appearances==0 in role-filtered stances)
-    toward = [v if v is not None and not np.isnan(v) else 0.0 for v in toward]
-    away = [v if v is not None and not np.isnan(v) else 0.0 for v in away]
+    toward = [_s(pvfs[v]["flip_rate_toward"]) for v in values]
+    away   = [_s(pvfs[v]["flip_rate_away"])   for v in values]
+    ns     = [pvfs[v].get("total_appearances", 0) for v in values]
 
     x = np.arange(len(values))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(max(7, len(values) * 0.8), 5))
-    bars_toward = ax.bar(x - width / 2, toward, width, label="Flip toward", color="steelblue")
-    bars_away = ax.bar(x + width / 2, away, width, label="Flip away", color="tomato")
+    w = 0.35
+    b_t = ax.bar(x - w / 2, toward, w, label="Flip toward", color="steelblue", alpha=0.85)
+    b_a = ax.bar(x + w / 2, away,   w, label="Flip away",   color="tomato",    alpha=0.85)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(values, rotation=35, ha="right", fontsize=9)
-    ax.set_ylabel("Rate (out of all scenarios value appeared in)")
-    ax.set_ylim(0, max(float(np.nanmax(toward + away)) * 1.25 if any(v > 0 for v in toward + away) else 0.1, 0.05))
-    ax.set_title(
-        f"Per-Value Flip Rates — {result['model']} / {result['value_set']} / {result['num_turns']}t",
-        fontsize=10,
+    ax.set_xticklabels(
+        [f"{v}\n(n={n})" for v, n in zip(values, ns)],
+        rotation=35, ha="right", fontsize=8,
     )
-    ax.legend()
-    ax.bar_label(bars_toward, fmt="%.2f", fontsize=7)
-    ax.bar_label(bars_away, fmt="%.2f", fontsize=7)
+    ax.set_ylabel("Rate")
+    peak = float(np.nanmax(toward + away)) if any(v > 0 for v in toward + away) else 0.1
+    ax.set_ylim(0, max(peak * 1.3, 0.05))
+    ax.bar_label(b_t, fmt="%.2f", fontsize=7, padding=2)
+    ax.bar_label(b_a, fmt="%.2f", fontsize=7, padding=2)
+    ax.legend(fontsize=8)
+    ax.set_title(title, fontsize=9)
+
+
+def plot_per_value_flip_stats(result: dict, output_path: Path):
+    """Grouped bar chart: flip-toward-rate and flip-away-rate per value.
+
+    For non-neutral stances, shows two panels side by side:
+      Left  — Overall: all pairs, all appearances (unfiltered)
+      Right — Role-filtered: only appearances where the value was in the
+              favoured role (v1 for pro_v1, v2 for pro_v2)
+
+    The n= count under each label is the number of scenarios that back the bar.
+    """
+    pvfs_filtered = result.get("per_value_flip_stats", {})
+    pvfs_overall  = result.get("per_value_flip_stats_overall", {})
+    if not pvfs_filtered:
+        return
+
+    stance = result.get("stance", "neutral")
+    mode   = result.get("mode", "mcq")
+    model  = result["model"]
+    vs     = result["value_set"]
+    nt     = result["num_turns"]
+    base_title = f"{model} · {vs} · {stance} · {nt} turns" + (f" · {mode}" if mode != "mcq" else "")
+
+    values = sorted(pvfs_filtered.keys())
+
+    if stance == "neutral" or not pvfs_overall or pvfs_overall == pvfs_filtered:
+        # Single panel
+        fig, ax = plt.subplots(figsize=(max(7, len(values) * 0.9), 5))
+        _flip_bars(ax, values, pvfs_filtered, f"Flip Rates — {base_title}")
+    else:
+        # Dual panel: overall | role-filtered
+        fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(max(14, len(values) * 1.8), 5),
+                                          sharey=True)
+        _flip_bars(ax_l, values, pvfs_overall,
+                   f"Overall (all pairs) — {base_title}")
+        _flip_bars(ax_r, values, pvfs_filtered,
+                   f"Role-filtered (favoured role only) — {base_title}")
+        fig.suptitle(f"Flip Rates — {base_title}", fontsize=10, fontweight="bold")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -353,35 +391,51 @@ def plot_scenario_radar(result: dict, output_path: Path):
     plot_radar_t0_t1(ranking_t0, ranking_t1, title=title, output_path=output_path)
 
 
-def plot_scenario_drift_bars(result: dict, output_path: Path):
-    """Horizontal bar chart of per-value BT score delta (T1 - T0).
-
-    For non-neutral stances, uses role_filtered_drift when available so that
-    each value's delta only reflects scenarios where it was in the favored role.
-    """
-    stance = result.get("stance", "neutral")
-    role_filtered = result.get("role_filtered_drift", {})
-    if stance != "neutral" and role_filtered.get("per_value_delta"):
-        delta = role_filtered["per_value_delta"]
-        subtitle = f"[role-filtered: {stance}]"
-    else:
-        delta = result.get("drift", {}).get("per_value_delta", {})
-        subtitle = ""
-    if not delta:
-        return
-
+def _drift_bar_ax(ax, delta: dict, title: str):
+    """Draw a horizontal BT-delta bar chart on *ax*."""
     values = sorted(delta.keys(), key=lambda v: delta[v])
     deltas = [delta[v] for v in values]
     colors = ["steelblue" if d >= 0 else "tomato" for d in deltas]
-
-    fig, ax = plt.subplots(figsize=(6, max(3, len(values) * 0.4)))
-    ax.barh(values, deltas, color=colors)
-    ax.axvline(0, color="black", linewidth=0.8)
+    bars = ax.barh(values, deltas, color=colors, alpha=0.85)
+    ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
     ax.set_xlabel("BT score delta (T1 − T0)")
-    title = f"Value Drift — {result['model']} / {result['value_set']} / {result['num_turns']}t"
-    if subtitle:
-        title += f"\n{subtitle}"
-    ax.set_title(title, fontsize=10)
+    ax.bar_label(bars, fmt="%.3f", fontsize=7, padding=3)
+    ax.set_title(title, fontsize=9)
+
+
+def plot_scenario_drift_bars(result: dict, output_path: Path):
+    """Horizontal bar chart of per-value BT score delta (T1 − T0).
+
+    For non-neutral stances, shows two panels side by side:
+      Left  — Overall: global BT delta (all scenarios contribute)
+      Right — Role-filtered: BT delta computed only from scenarios where
+              each value was in the favoured role (v1/v2 matching stance)
+
+    A positive delta means the value's BT ability rose after the conversation.
+    """
+    stance   = result.get("stance", "neutral")
+    mode     = result.get("mode", "mcq")
+    base     = f"{result['model']} · {result['value_set']} · {stance} · {result['num_turns']} turns" \
+               + (f" · {mode}" if mode != "mcq" else "")
+    delta_overall  = result.get("drift", {}).get("per_value_delta", {})
+    delta_filtered = result.get("role_filtered_drift", {}).get("per_value_delta", {})
+
+    if not delta_overall:
+        return
+
+    if stance == "neutral" or not delta_filtered:
+        fig, ax = plt.subplots(figsize=(7, max(3, len(delta_overall) * 0.45 + 1)))
+        _drift_bar_ax(ax, delta_overall, f"Value Drift (BT delta) — {base}")
+    else:
+        fig, (ax_l, ax_r) = plt.subplots(
+            1, 2, figsize=(13, max(3, len(delta_overall) * 0.45 + 1))
+        )
+        _drift_bar_ax(ax_l, delta_overall,
+                      f"Overall (all pairs) — {base}")
+        _drift_bar_ax(ax_r, delta_filtered,
+                      f"Role-filtered (favoured role only) — {base}")
+        fig.suptitle(f"Value Drift (BT delta) — {base}", fontsize=10, fontweight="bold")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -492,73 +546,86 @@ def plot_rank_shift_heatmap_single(result: dict, output_path: Path):
     plt.close()
 
 
-def generate_scenario_experiment_plots(all_results: list[dict], results_dir: Path):
+def generate_scenario_experiment_plots(
+    all_results: list[dict], results_dir: Path, run_id: str | None = None
+):
     """Generate all plots for the scenario conversation experiment.
 
-    Called at the end of run_scenario_conversation_experiment.py.
+    Folder layout::
 
-    Per-condition plots (one sub-folder per model/value_set/turns/stance/mode):
-      - radar_t0_t1.png           spider chart of BT scores before/after
-      - bt_ranking_bars.png       absolute BT abilities T0 vs T1 with 95% CIs
-      - drift_bars.png            per-value BT score delta bar chart
-      - pair_consistency.png      heatmap: pairs × (flip_rate, directional_consistency)
-      - per_value_flip_rates.png  grouped bars: flip-toward vs flip-away per value
-
-    Cross-condition plots (aggregated, one file per value_set/mode/stance):
-      - ranking_heatmap.png       panels T0/T1@5t/T1@10t…; rows=stances; cells=rank
-      - rank_shift_heatmap.png    rank delta from T0; same structure (blue=rose)
-      - radar_panel.png           one subplot per (num_turns × stance); T0 vs T1 overlay
-      - drift_by_turns.png        L2 drift vs num_turns, lines per value_set
-      - l2_heatmap.png            L2 drift + flip rate heatmap value_set × num_turns
-      - stance_comparison.png     flip-toward/away per value by stance (if >1 stance)
-      - mode_comparison.png       flip-toward/away per value MCQ vs open-ended (if >1 mode)
+        plots/{run_id}/
+          per_condition/{model}/{value_set}/{stance}/{N}t[_{mode}]/
+              radar.png               BT spider chart T0 vs T1
+              bt_ranking_bars.png     absolute BT abilities ± 95 % CI
+              drift_bars.png          per-value BT delta; dual-panel for non-neutral
+              flip_rates.png          flip-toward/away; dual-panel for non-neutral
+              pair_consistency.png    per-pair flip rate & directional consistency
+              ranking_heatmap.png     ordinal ranks T0 vs T1
+              rank_shift_heatmap.png  rank change from T0 baseline
+          cross_condition/
+            ranking/                  ranking & radar panels across turn counts
+            drift/                    L2 drift curves & heatmaps
+            aggregated/               turn-count-averaged drift & flip rates
+            comparison/               stance, mode, and model comparisons
     """
     if not all_results:
         return
 
-    plots_dir = results_dir / "plots"
+    if run_id is None:
+        from datetime import datetime
+        run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+
+    plots_dir = results_dir / "plots" / run_id
     plots_dir.mkdir(parents=True, exist_ok=True)
+
+    per_cond_root = plots_dir / "per_condition"
+    cross_root    = plots_dir / "cross_condition"
+    ranking_dir   = cross_root / "ranking"
+    drift_dir     = cross_root / "drift"
+    agg_dir       = cross_root / "aggregated"
+    cmp_dir       = cross_root / "comparison"
 
     # --- Per-condition plots ---
     for r in all_results:
-        stance = r.get("stance", "neutral")
-        mode = r.get("mode", "mcq")
-        stance_tag = f"_{stance}" if stance != "neutral" else ""
+        stance   = r.get("stance", "neutral")
+        mode     = r.get("mode", "mcq")
         mode_tag = f"_{mode}" if mode != "mcq" else ""
-        tag = f"{r['model']}_{r['value_set']}_{r['num_turns']}t{stance_tag}{mode_tag}"
-        cond_dir = plots_dir / tag
+        cond_dir = per_cond_root / r["model"] / r["value_set"] / stance / f"{r['num_turns']}t{mode_tag}"
         cond_dir.mkdir(parents=True, exist_ok=True)
 
         plot_pair_consistency_heatmap(r, cond_dir / "pair_consistency.png")
-        plot_per_value_flip_stats(r, cond_dir / "per_value_flip_rates.png")
-        plot_scenario_radar(r, cond_dir / "radar_t0_t1.png")
+        plot_per_value_flip_stats(r, cond_dir / "flip_rates.png")
+        plot_scenario_radar(r, cond_dir / "radar.png")
         plot_scenario_drift_bars(r, cond_dir / "drift_bars.png")
         plot_bt_ranking_bars(r, cond_dir / "bt_ranking_bars.png")
-        # Per-condition ranking and rank-shift heatmaps
         plot_ranking_heatmap_single(r, cond_dir / "ranking_heatmap.png")
         plot_rank_shift_heatmap_single(r, cond_dir / "rank_shift_heatmap.png")
 
-    # --- Cross-condition plots ---
-    plot_ranking_heatmap_scenario(all_results, plots_dir / "ranking_heatmap.png")
-    plot_rank_shift_heatmap_scenario(all_results, plots_dir / "rank_shift_heatmap.png")
-    plot_radar_panel_scenario(all_results, plots_dir / "radar_panel.png")
-    plot_drift_by_turns_scenario(all_results, plots_dir / "drift_by_turns.png")
-    plot_l2_heatmap_scenario(all_results, plots_dir / "l2_heatmap.png")
-    # Aggregated drift bars and per-value flip rates across all conditions
-    plot_aggregated_drift_bars(all_results, plots_dir / "aggregated_drift_bars.png")
-    plot_aggregated_per_value_flip_rate(all_results, plots_dir / "aggregated_per_value_flip_rates.png")
+    # --- Cross-condition: ranking & radar ---
+    plot_ranking_heatmap_scenario(all_results, ranking_dir / "ranking_heatmap.png")
+    plot_rank_shift_heatmap_scenario(all_results, ranking_dir / "rank_shift_heatmap.png")
+    plot_radar_panel_scenario(all_results, ranking_dir / "radar_panel.png")
 
+    # --- Cross-condition: drift curves ---
+    plot_drift_by_turns_scenario(all_results, drift_dir / "drift_by_turns.png")
+    plot_l2_heatmap_scenario(all_results, drift_dir / "l2_heatmap.png")
+
+    # --- Cross-condition: aggregated (averaged over turn counts) ---
+    plot_aggregated_drift_bars(all_results, agg_dir / "drift_bars.png")
+    plot_aggregated_per_value_flip_rate(all_results, agg_dir / "flip_rates.png")
+
+    # --- Cross-condition: comparisons ---
     stances_present = {r.get("stance", "neutral") for r in all_results}
     if len(stances_present) > 1:
-        plot_stance_comparison(all_results, plots_dir / "stance_comparison.png")
+        plot_stance_comparison(all_results, cmp_dir / "stance_comparison.png")
 
     modes_present = {r.get("mode", "mcq") for r in all_results}
     if len(modes_present) > 1:
-        plot_mode_comparison(all_results, plots_dir / "mode_comparison.png")
+        plot_mode_comparison(all_results, cmp_dir / "mode_comparison.png")
 
     models_present = {r["model"] for r in all_results}
     if len(models_present) > 1:
-        plot_model_comparison(all_results, plots_dir / "model_comparison.png")
+        plot_model_comparison(all_results, cmp_dir / "model_comparison.png")
 
 
 # ---------------------------------------------------------------------------
@@ -633,10 +700,11 @@ def plot_bt_ranking_bars(result: dict, output_path: Path):
         fontsize=8,
     )
     stance = result.get("stance", "neutral")
-    mode = result.get("mode", "mcq")
+    mode   = result.get("mode", "mcq")
     ax.set_title(
-        f"BT Rankings — {result['model']} / {result['value_set']} / "
-        f"{result['num_turns']}t / {stance} / {mode}",
+        f"BT Abilities T0 vs T1 — {result['model']} · {result['value_set']} · "
+        f"{stance} · {result['num_turns']} turns"
+        + (f" · {mode}" if mode != "mcq" else ""),
         fontsize=9,
     )
     ax.legend(fontsize=8)
@@ -1104,13 +1172,28 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
         plt.close()
 
 
-def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
-    """Cross-condition: per-value BT delta (T1−T0) averaged over num_turns conditions.
+def _agg_drift_ax(ax, value_deltas: dict, title: str):
+    """Draw an aggregated drift bar (mean ± SD) on *ax*."""
+    from collections import defaultdict
+    values = sorted(value_deltas, key=lambda v: np.mean(value_deltas[v]))
+    means  = [np.mean(value_deltas[v]) for v in values]
+    sds    = [np.std(value_deltas[v])  for v in values]
+    colors = ["steelblue" if m >= 0 else "tomato" for m in means]
+    ax.barh(values, means, xerr=sds, color=colors, alpha=0.85,
+            error_kw=dict(ecolor="black", capsize=3, linewidth=0.9))
+    ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("Mean BT delta (T1 − T0)  ±1 SD")
+    ax.set_title(title, fontsize=9)
 
-    One file per (model, value_set, stance, mode).  Bars show mean delta ±1 SD.
-    For non-neutral stances, uses role_filtered_drift so each value's delta
-    only reflects scenarios where it was in the favored role.
-    Blue = value rose on average, red = dropped.
+
+def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
+    """Turn-count-averaged per-value BT delta.
+
+    One file per (model, value_set, stance, mode).
+    For non-neutral stances, shows two panels:
+      Left  — Overall: global drift averaged over turn counts
+      Right — Role-filtered: delta from favoured-role scenarios only
+    Error bars = ±1 SD across turn counts.
     """
     if not all_results:
         return
@@ -1121,39 +1204,38 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
         groups[(r["model"], r["value_set"], r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
 
     for (model, vs, stance, mode), records in groups.items():
-        # For non-neutral stances, prefer role_filtered_drift; fall back to global drift
-        value_deltas: dict[str, list[float]] = defaultdict(list)
+        overall_deltas:  dict[str, list[float]] = defaultdict(list)
+        filtered_deltas: dict[str, list[float]] = defaultdict(list)
         for r in records:
-            role_filtered = r.get("role_filtered_drift", {})
-            if stance != "neutral" and role_filtered.get("per_value_delta"):
-                source = role_filtered["per_value_delta"]
-            else:
-                source = r.get("drift", {}).get("per_value_delta", {})
-            for v, d in source.items():
-                value_deltas[v].append(d)
+            for v, d in r.get("drift", {}).get("per_value_delta", {}).items():
+                overall_deltas[v].append(d)
+            rf = r.get("role_filtered_drift", {}).get("per_value_delta", {})
+            for v, d in rf.items():
+                filtered_deltas[v].append(d)
 
-        if not value_deltas:
+        if not overall_deltas:
             continue
 
-        values = sorted(value_deltas, key=lambda v: np.mean(value_deltas[v]))
-        means = [np.mean(value_deltas[v]) for v in values]
-        sds = [np.std(value_deltas[v]) for v in values]
-        colors = ["steelblue" if m >= 0 else "tomato" for m in means]
-
-        role_note = f" [role-filtered: {stance}]" if stance != "neutral" else ""
-        fig, ax = plt.subplots(figsize=(7, max(3.5, len(values) * 0.55 + 1.0)))
-        ax.barh(values, means, xerr=sds, color=colors, alpha=0.85,
-                error_kw=dict(ecolor="black", capsize=3, linewidth=0.9))
-        ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
-        ax.set_xlabel("Mean BT score delta (T1 − T0)  ±1 SD")
         stance_tag = f"_{stance}" if stance != "neutral" else ""
-        mode_tag = f"_{mode}" if mode != "mcq" else ""
-        ax.set_title(
-            f"Aggregated Value Drift — {model} / {vs} / {stance}"
-            f"{(' / ' + mode) if mode != 'mcq' else ''}{role_note}\n"
-            f"({len(records)} turn condition{'s' if len(records) != 1 else ''})",
-            fontsize=10,
-        )
+        mode_tag   = f"_{mode}"   if mode   != "mcq"     else ""
+        n_cond     = len(records)
+        base       = f"{model} · {vs} · {stance}" + (f" · {mode}" if mode != "mcq" else "") \
+                     + f"  ({n_cond} turn condition{'s' if n_cond != 1 else ''})"
+
+        if stance == "neutral" or not filtered_deltas:
+            n_vals = len(overall_deltas)
+            fig, ax = plt.subplots(figsize=(7, max(3.5, n_vals * 0.55 + 1.0)))
+            _agg_drift_ax(ax, overall_deltas, f"Aggregated Value Drift — {base}")
+        else:
+            n_vals = max(len(overall_deltas), len(filtered_deltas))
+            fig, (ax_l, ax_r) = plt.subplots(
+                1, 2, figsize=(13, max(3.5, n_vals * 0.55 + 1.0))
+            )
+            _agg_drift_ax(ax_l, overall_deltas,
+                          f"Overall (all pairs) — {base}")
+            _agg_drift_ax(ax_r, filtered_deltas,
+                          f"Role-filtered (favoured role only) — {base}")
+            fig.suptitle(f"Aggregated Value Drift — {base}", fontsize=10, fontweight="bold")
 
         out = output_path.parent / f"{output_path.stem}_{model}_{vs}{stance_tag}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1162,11 +1244,39 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
         plt.close()
 
 
-def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Path):
-    """Cross-condition: mean flip-toward / flip-away per value, averaged over num_turns.
+def _agg_flip_ax(ax, toward_all: dict, away_all: dict, title: str):
+    """Draw aggregated flip-toward/away grouped bars (mean ± SD) on *ax*."""
+    all_values   = sorted(set(toward_all) | set(away_all))
+    toward_means = [np.mean(toward_all[v]) if v in toward_all else 0.0 for v in all_values]
+    toward_sds   = [np.std(toward_all[v])  if v in toward_all else 0.0 for v in all_values]
+    away_means   = [np.mean(away_all[v])   if v in away_all   else 0.0 for v in all_values]
+    away_sds     = [np.std(away_all[v])    if v in away_all   else 0.0 for v in all_values]
 
-    One file per (model, value_set, stance, mode).  Grouped bars; error bars = ±1 SD.
-    For non-neutral stances, per_value_flip_stats already reflects role-filtered counts.
+    x   = np.arange(len(all_values))
+    w   = 0.35
+    ekw = dict(ecolor="black", capsize=3, linewidth=0.9)
+    b_t = ax.bar(x - w / 2, toward_means, w, yerr=toward_sds,
+                 label="Flip toward", color="steelblue", alpha=0.85, error_kw=ekw)
+    b_a = ax.bar(x + w / 2, away_means,   w, yerr=away_sds,
+                 label="Flip away",   color="tomato",    alpha=0.85, error_kw=ekw)
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_values, rotation=35, ha="right", fontsize=8)
+    ax.set_ylabel("Mean rate  ±1 SD")
+    peak = float(np.nanmax(toward_means + away_means)) if any(v > 0 for v in toward_means + away_means) else 0.1
+    ax.set_ylim(0, max(peak * 1.35, 0.05))
+    ax.bar_label(b_t, fmt="%.2f", fontsize=7, padding=2)
+    ax.bar_label(b_a, fmt="%.2f", fontsize=7, padding=2)
+    ax.legend(fontsize=8)
+    ax.set_title(title, fontsize=9)
+
+
+def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Path):
+    """Turn-count-averaged per-value flip-toward / flip-away rates.
+
+    One file per (model, value_set, stance, mode).  Error bars = ±1 SD.
+    For non-neutral stances, shows two panels:
+      Left  — Overall: all appearances (per_value_flip_stats_overall)
+      Right — Role-filtered: appearances in favoured role only (per_value_flip_stats)
     """
     if not all_results:
         return
@@ -1177,54 +1287,46 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
         groups[(r["model"], r["value_set"], r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
 
     for (model, vs, stance, mode), records in groups.items():
-        toward_all: dict[str, list[float]] = defaultdict(list)
-        away_all: dict[str, list[float]] = defaultdict(list)
         def _safe(x):
             return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
 
-        for r in records:
-            for v, stats in r.get("per_value_flip_stats", {}).items():
-                toward_all[v].append(_safe(stats.get("flip_rate_toward")))
-                away_all[v].append(_safe(stats.get("flip_rate_away")))
+        # Collect from overall (unfiltered) and from role-filtered sources
+        toward_overall: dict[str, list[float]] = defaultdict(list)
+        away_overall:   dict[str, list[float]] = defaultdict(list)
+        toward_filt:    dict[str, list[float]] = defaultdict(list)
+        away_filt:      dict[str, list[float]] = defaultdict(list)
 
-        all_values = sorted(toward_all.keys())
-        if not all_values:
+        for r in records:
+            for v, stats in r.get("per_value_flip_stats_overall", r.get("per_value_flip_stats", {})).items():
+                toward_overall[v].append(_safe(stats.get("flip_rate_toward")))
+                away_overall[v].append(_safe(stats.get("flip_rate_away")))
+            for v, stats in r.get("per_value_flip_stats", {}).items():
+                toward_filt[v].append(_safe(stats.get("flip_rate_toward")))
+                away_filt[v].append(_safe(stats.get("flip_rate_away")))
+
+        if not toward_overall:
             continue
 
-        toward_means = [np.mean(toward_all[v]) for v in all_values]
-        toward_sds = [np.std(toward_all[v]) for v in all_values]
-        away_means = [np.mean(away_all[v]) for v in all_values]
-        away_sds = [np.std(away_all[v]) for v in all_values]
-
-        x = np.arange(len(all_values))
-        width = 0.35
-        ekw = dict(ecolor="black", capsize=3, linewidth=0.9)
-
-        fig, ax = plt.subplots(figsize=(max(7, len(all_values) * 0.9), 5))
-        bars_t = ax.bar(x - width / 2, toward_means, width, yerr=toward_sds,
-                        label="Flip toward", color="steelblue", alpha=0.85, error_kw=ekw)
-        bars_a = ax.bar(x + width / 2, away_means, width, yerr=away_sds,
-                        label="Flip away", color="tomato", alpha=0.85, error_kw=ekw)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(all_values, rotation=35, ha="right", fontsize=9)
-        ax.set_ylabel("Mean rate ±1 SD")
-        peak = float(np.nanmax(toward_means + away_means)) if (toward_means or away_means) else 0.0
-        ax.set_ylim(0, max(peak * 1.35, 0.05))
-        ax.bar_label(bars_t, fmt="%.2f", fontsize=7, padding=2)
-        ax.bar_label(bars_a, fmt="%.2f", fontsize=7, padding=2)
-        ax.legend()
-
-        role_note = f" [role-filtered: {stance}]" if stance != "neutral" else ""
-        ax.set_title(
-            f"Aggregated Per-Value Flip Rates — {model} / {vs} / {stance}"
-            f"{(' / ' + mode) if mode != 'mcq' else ''}{role_note}\n"
-            f"({len(records)} turn condition{'s' if len(records) != 1 else ''})",
-            fontsize=10,
-        )
-
+        n_cond     = len(records)
         stance_tag = f"_{stance}" if stance != "neutral" else ""
-        mode_tag = f"_{mode}" if mode != "mcq" else ""
+        mode_tag   = f"_{mode}"   if mode   != "mcq"     else ""
+        base       = f"{model} · {vs} · {stance}" + (f" · {mode}" if mode != "mcq" else "") \
+                     + f"  ({n_cond} turn condition{'s' if n_cond != 1 else ''})"
+        n_vals     = len(toward_overall)
+
+        if stance == "neutral" or toward_overall == toward_filt:
+            fig, ax = plt.subplots(figsize=(max(7, n_vals * 0.9), 5))
+            _agg_flip_ax(ax, toward_overall, away_overall,
+                         f"Aggregated Flip Rates — {base}")
+        else:
+            fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(max(14, n_vals * 1.8), 5),
+                                              sharey=True)
+            _agg_flip_ax(ax_l, toward_overall, away_overall,
+                         f"Overall (all pairs) — {base}")
+            _agg_flip_ax(ax_r, toward_filt,    away_filt,
+                         f"Role-filtered (favoured role only) — {base}")
+            fig.suptitle(f"Aggregated Flip Rates — {base}", fontsize=10, fontweight="bold")
+
         out = output_path.parent / f"{output_path.stem}_{model}_{vs}{stance_tag}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
