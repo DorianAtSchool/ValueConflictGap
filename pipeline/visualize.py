@@ -314,6 +314,9 @@ def plot_per_value_flip_stats(result: dict, output_path: Path):
     values = sorted(pvfs.keys())
     toward = [pvfs[v]["flip_rate_toward"] for v in values]
     away = [pvfs[v]["flip_rate_away"] for v in values]
+    # Replace NaN (can occur when total_appearances==0 in role-filtered stances)
+    toward = [v if v is not None and not np.isnan(v) else 0.0 for v in toward]
+    away = [v if v is not None and not np.isnan(v) else 0.0 for v in away]
 
     x = np.arange(len(values))
     width = 0.35
@@ -325,7 +328,7 @@ def plot_per_value_flip_stats(result: dict, output_path: Path):
     ax.set_xticks(x)
     ax.set_xticklabels(values, rotation=35, ha="right", fontsize=9)
     ax.set_ylabel("Rate (out of all scenarios value appeared in)")
-    ax.set_ylim(0, max(max(toward + away, default=0) * 1.25, 0.05))
+    ax.set_ylim(0, max(float(np.nanmax(toward + away)) * 1.25 if any(v > 0 for v in toward + away) else 0.1, 0.05))
     ax.set_title(
         f"Per-Value Flip Rates — {result['model']} / {result['value_set']} / {result['num_turns']}t",
         fontsize=10,
@@ -1077,7 +1080,11 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
                 if rec is None:
                     continue
                 pvfs = rec.get("per_value_flip_stats", {})
-                heights = [pvfs.get(v, {}).get(metric, 0) or 0 for v in all_values]
+                heights = [
+                    0.0 if (h := pvfs.get(v, {}).get(metric)) is None
+                    or (isinstance(h, float) and np.isnan(h)) else float(h)
+                    for v in all_values
+                ]
                 offset = (si - (len(stances) - 1) / 2) * width
                 ax.bar(x + offset, heights, width, label=stance,
                        color=stance_colors.get(stance, "gray"), alpha=0.85)
@@ -1172,10 +1179,13 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
     for (model, vs, stance, mode), records in groups.items():
         toward_all: dict[str, list[float]] = defaultdict(list)
         away_all: dict[str, list[float]] = defaultdict(list)
+        def _safe(x):
+            return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
+
         for r in records:
             for v, stats in r.get("per_value_flip_stats", {}).items():
-                toward_all[v].append(stats.get("flip_rate_toward", 0) or 0)
-                away_all[v].append(stats.get("flip_rate_away", 0) or 0)
+                toward_all[v].append(_safe(stats.get("flip_rate_toward")))
+                away_all[v].append(_safe(stats.get("flip_rate_away")))
 
         all_values = sorted(toward_all.keys())
         if not all_values:
@@ -1199,7 +1209,8 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
         ax.set_xticks(x)
         ax.set_xticklabels(all_values, rotation=35, ha="right", fontsize=9)
         ax.set_ylabel("Mean rate ±1 SD")
-        ax.set_ylim(0, max(max(toward_means + away_means, default=0) * 1.35, 0.05))
+        peak = float(np.nanmax(toward_means + away_means)) if (toward_means or away_means) else 0.0
+        ax.set_ylim(0, max(peak * 1.35, 0.05))
         ax.bar_label(bars_t, fmt="%.2f", fontsize=7, padding=2)
         ax.bar_label(bars_a, fmt="%.2f", fontsize=7, padding=2)
         ax.legend()
@@ -1275,6 +1286,8 @@ def plot_model_comparison(all_results: list[dict], output_path: Path):
                 rec = next((r for r in records if r["model"] == model), None)
                 if rec is None:
                     continue
+                def _h(x):
+                    return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
                 if metric_key == "bt_delta":
                     rf = rec.get("role_filtered_drift", {})
                     source = (
@@ -1282,10 +1295,10 @@ def plot_model_comparison(all_results: list[dict], output_path: Path):
                         if stance != "neutral" and rf.get("per_value_delta")
                         else rec.get("drift", {}).get("per_value_delta", {})
                     )
-                    heights = [source.get(v, 0) or 0 for v in all_values]
+                    heights = [_h(source.get(v)) for v in all_values]
                 else:
                     pvfs = rec.get("per_value_flip_stats", {})
-                    heights = [pvfs.get(v, {}).get(metric_key, 0) or 0 for v in all_values]
+                    heights = [_h(pvfs.get(v, {}).get(metric_key)) for v in all_values]
                 offset = (mi - (len(models) - 1) / 2) * width
                 ax.bar(x + offset, heights, width, label=model,
                        color=color_map[model], alpha=0.85)
@@ -1349,7 +1362,11 @@ def plot_mode_comparison(all_results: list[dict], output_path: Path):
                 if rec is None:
                     continue
                 pvfs = rec.get("per_value_flip_stats", {})
-                heights = [pvfs.get(v, {}).get(metric, 0) or 0 for v in all_values]
+                heights = [
+                    0.0 if (h := pvfs.get(v, {}).get(metric)) is None
+                    or (isinstance(h, float) and np.isnan(h)) else float(h)
+                    for v in all_values
+                ]
                 offset = (mi - (len(modes) - 1) / 2) * width
                 ax.bar(x + offset, heights, width, label=mode,
                        color=mode_colors.get(mode, "gray"), alpha=0.85)
