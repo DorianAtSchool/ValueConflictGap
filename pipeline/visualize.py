@@ -244,6 +244,7 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
     """Heatmap of per-pair flip rate and directional consistency.
 
     Rows = value pairs, two columns: flip_rate and directional_consistency.
+    A third text column shows the dominant value (the value that flips were toward).
     """
     pc = result.get("pair_consistency", {})
     if not pc:
@@ -256,29 +257,46 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
         for p in pairs
     ]
     dominant = [pc[p]["dominant_value"] for p in pairs]
-    # Short labels: "auto vs harm"
     short = [p.replace("_vs_", " vs ") for p in pairs]
 
     data = pd.DataFrame({
         "flip_rate": flip_rates,
-        "directional_consistency": consistencies,
+        "dir. consistency": consistencies,
     }, index=short)
 
-    fig, ax = plt.subplots(figsize=(5, max(4, len(pairs) * 0.4)))
+    row_height = 0.6
+    fig, ax = plt.subplots(figsize=(7, max(3.5, len(pairs) * row_height + 1.5)))
+
+    # cbar=False: all cells are annotated, colorbar just competes with the
+    # dominant-value text column we draw to the right.
     sns.heatmap(
         data, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
-        linewidths=0.5, ax=ax,
+        linewidths=0.5, ax=ax, cbar=False,
     )
     ax.set_title(
         f"Pair Flip Stats — {result['model']} / {result['value_set']} / {result['num_turns']}t",
-        fontsize=10,
+        fontsize=10, pad=10,
     )
-    # Annotate dominant value per row
-    for i, dom in enumerate(dominant):
-        ax.text(2.05, i + 0.5, dom, va="center", fontsize=7, color="navy")
+    ax.set_ylabel("")
 
+    # Dominant-value column: placed in figure coords to avoid axes-clip issues.
+    # We compute the axes bbox after drawing, then position text just outside it.
+    fig.canvas.draw()
+    ax_pos = ax.get_position()   # normalised figure coordinates
+    n = len(pairs)
+    for i, dom in enumerate(dominant):
+        # y: map row centre (top-to-bottom) to figure coords
+        row_frac = (i + 0.5) / n
+        fig_y = ax_pos.y1 - row_frac * ax_pos.height
+        fig.text(
+            ax_pos.x1 + 0.02, fig_y, dom,
+            va="center", ha="left", fontsize=7, color="navy",
+            transform=fig.transFigure,
+        )
+
+    # Leave right margin so the dominant-value text isn't clipped
+    fig.subplots_adjust(right=0.72)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
