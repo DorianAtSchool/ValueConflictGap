@@ -31,22 +31,23 @@ Usage
 -----
   # Quick test — one model, one value set, pair grouping:
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft \\
       --value-sets HHH \\
       --turn-counts 5 \\
       --num-scenarios 100 \\
       --simulator-api-key sk-ant-...
 
-  # Full run — pair grouping (recommended):
+  # Multiple models and stances in a single run:
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft llama-3 \\
+      --stances neutral pro_v1 pro_v2 \\
       --value-sets HHH personalprotective \\
       --turn-counts 5 10 \\
       --simulator-api-key sk-ant-...
 
   # Per-scenario (expensive, maximum signal):
   python run_scenario_conversation_experiment.py \\
-      --model tulu-3-sft \\
+      --models tulu-3-sft \\
       --value-sets HHH \\
       --group-by scenario \\
       --turn-counts 5 \\
@@ -234,27 +235,28 @@ def analyze_pair_drift(
     model_key: str,
     num_turns: int,
     log: logging.Logger,
+    stance: str = "neutral",
 ) -> dict:
     """Compute per-pair flip consistency and overall Bradley-Terry drift.
 
     Per-pair directional consistency is the key new metric: for each value pair,
     after a conversation seeded by that pair, what fraction of flips go toward
     each value?  High consistency → the context reliably primes that value.
+
+    For non-neutral stances, per_value_flip_stats and role_filtered_drift only
+    count scenarios where each value was in the favored role:
+      - pro_v1: count value V only in pairs where V == value1
+      - pro_v2: count value V only in pairs where V == value2
+    This lets you see whether the stance actually moved the value it was
+    supposed to push, rather than diluting signal with unfavored-role appearances.
     """
     # --- overall T1: aggregate all per-group T1 outcomes ---
-    # Each group's scenarios were probed with their own context.
-    # We merge them all back into one dataframe to fit a global BT ranking.
-    all_t1_parts = []
-    for group_key, outcomes_t1 in outcomes_t1_by_group.items():
-        all_t1_parts.append(outcomes_t1)
+    all_t1_parts = list(outcomes_t1_by_group.values())
 
     if not all_t1_parts:
         return {}
 
     outcomes_t1_all = pd.concat(all_t1_parts, ignore_index=True)
-
-    # Deduplicate in case of overlapping scenario_ids (scenario grouping with
-    # multiple groups per scenario is not expected, but be safe).
     outcomes_t1_all = outcomes_t1_all.drop_duplicates(subset=["scenario_id"])
 
     ranking_t0 = fit_bradley_terry(outcomes_t0)
@@ -292,15 +294,13 @@ def analyze_pair_drift(
             "toward_v1": toward_v1,
             "toward_v2": toward_v2,
             "dominant_value": dominant,
-            # 1.0 = all flips went the same direction, 0.5 = random
             "directional_consistency": float(consistency),
         }
 
     # --- per-value flip stats ---
-    # For each value V, across ALL scenarios where V appeared (in any pair),
-    # count how many times the decision flipped toward V vs away from V.
-    # "flip toward V" = winner_t0 != V and winner_t1 == V
-    # "flip away from V" = winner_t0 == V and winner_t1 != V
+    # For non-neutral stances, restrict each value's stats to scenarios where
+    # it appeared in the "favored role" (v1 for pro_v1, v2 for pro_v2).
+    # For neutral, count all appearances (existing behaviour).
     all_values = sorted(set(outcomes_t0["value1"]) | set(outcomes_t0["value2"]))
     per_value_flip_stats: dict[str, dict] = {}
     for value in all_values:
@@ -309,6 +309,11 @@ def analyze_pair_drift(
         flips_away = 0
         for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
             if value not in (v1, v2):
+                continue
+            # Skip pairs where this value is NOT in the favored role
+            if stance == "pro_v1" and value != v1:
+                continue
+            if stance == "pro_v2" and value != v2:
                 continue
             pair_key = f"{v1}_vs_{v2}"
             pair_t1 = outcomes_t1_by_group.get(pair_key)
@@ -344,8 +349,45 @@ def analyze_pair_drift(
             ),
         }
 
+    # --- role-filtered BT drift (non-neutral stances only) ---
+    # For each value V, compute its BT ability delta using only outcomes from
+    # pairs where V was in the favored role.  This isolates the effect of the
+    # stance on the value it was designed to push.
+    role_filtered_per_value_delta: dict[str, float] = {}
+    if stance != "neutral":
+        role_col = "value1" if stance == "pro_v1" else "value2"
+        for target_value in sorted(set(outcomes_t0[role_col])):
+            # Collect T0 and T1 outcomes for pairs where target_value is in role
+            role_t0_parts = []
+            role_t1_parts = []
+            for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
+                if (stance == "pro_v1" and v1 != target_value) or \
+                   (stance == "pro_v2" and v2 != target_value):
+                    continue
+                pair_key = f"{v1}_vs_{v2}"
+                pair_t1 = outcomes_t1_by_group.get(pair_key)
+                if pair_t1 is None or pair_t1.empty:
+                    continue
+                role_t0_parts.append(pair_t0)
+                role_t1_parts.append(pair_t1)
+            if not role_t0_parts or not role_t1_parts:
+                continue
+            role_t0 = pd.concat(role_t0_parts, ignore_index=True)
+            role_t1 = pd.concat(role_t1_parts, ignore_index=True).drop_duplicates("scenario_id")
+            try:
+                rk_t0 = fit_bradley_terry(role_t0)
+                rk_t1 = fit_bradley_terry(role_t1)
+                ab_t0 = {row["value"]: row["ability"] for row in rk_t0.to_dict(orient="records")}
+                ab_t1 = {row["value"]: row["ability"] for row in rk_t1.to_dict(orient="records")}
+                if target_value in ab_t0 and target_value in ab_t1:
+                    role_filtered_per_value_delta[target_value] = float(
+                        ab_t1[target_value] - ab_t0[target_value]
+                    )
+            except Exception:
+                pass
+
     log.info(
-        f"  {value_set}/{num_turns}t: "
+        f"  {value_set}/{num_turns}t (stance={stance}): "
         f"L2={drift['l2_distance']:.3f}, "
         f"ρ={drift['rank_correlation']:.3f}, "
         f"flip={flip_stats['overall_flip_rate']:.3f}"
@@ -357,21 +399,25 @@ def analyze_pair_drift(
     if high_consistency:
         log.info(f"  High-consistency pairs (≥0.7): {high_consistency}")
 
-    # Log top movers by net flip rate
+    # Log top movers by net flip rate (using role-filtered stats for non-neutral stances)
     movers = sorted(
         per_value_flip_stats.items(),
         key=lambda kv: abs(kv[1]["net_flip_rate"]) if not np.isnan(kv[1]["net_flip_rate"]) else 0,
         reverse=True,
     )[:3]
+    role_note = "" if stance == "neutral" else f" [role-filtered for {stance}]"
     for v, s in movers:
         if not np.isnan(s["net_flip_rate"]):
             log.info(
-                f"    {v}: toward={s['flip_rate_toward']:.2f}, "
+                f"    {v}{role_note}: toward={s['flip_rate_toward']:.2f}, "
                 f"away={s['flip_rate_away']:.2f}, net={s['net_flip_rate']:+.2f} "
                 f"(n={s['total_appearances']})"
             )
+    if role_filtered_per_value_delta:
+        top_rf = sorted(role_filtered_per_value_delta.items(), key=lambda kv: abs(kv[1]), reverse=True)[:3]
+        log.info(f"  Role-filtered BT delta top movers: " + ", ".join(f"{v}={d:+.3f}" for v, d in top_rf))
 
-    return {
+    result = {
         "model": model_key,
         "value_set": value_set,
         "num_turns": num_turns,
@@ -382,6 +428,9 @@ def analyze_pair_drift(
         "pair_consistency": pair_consistency,
         "per_value_flip_stats": per_value_flip_stats,
     }
+    if role_filtered_per_value_delta:
+        result["role_filtered_drift"] = {"per_value_delta": role_filtered_per_value_delta}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -396,12 +445,17 @@ def run_experiment(
     group_by: str,
     turn_counts: list[int],
     num_scenarios: int,
-    stance: str,
+    stances: list[str],
     mode: str,
     judge_client,
     judge_model: str,
     log: logging.Logger,
 ) -> list[dict]:
+    """Run all (value_set × stance × num_turns) conditions for one model.
+
+    The model is loaded once and unloaded after all stances are done.
+    T0 probing is shared across stances (same baseline, no context).
+    """
     log.info(f"Loading model: {model_key} ({model_info['hf_id']})")
     model = AlignmentModel(
         model_info["hf_id"],
@@ -419,7 +473,7 @@ def run_experiment(
         if not dist_path.exists():
             save_json(dist_path, scenario_distribution_report(scenarios))
 
-        # --- T0: no context ---
+        # --- T0: no context — shared across all stances ---
         t0_cp = t0_checkpoint_path(model_key, value_set, mode)
         if t0_cp.exists():
             log.info("  T0 checkpoint exists, loading")
@@ -437,81 +491,85 @@ def run_experiment(
             save_json(t0_cp, {"outcomes": outcomes_t0.to_dict(orient="records")})
             log.info(f"  T0: {len(outcomes_t0)} outcomes")
 
-        # --- Generate / load per-group conversations ---
-        conversations = generate_group_conversations(
-            model=model,
-            model_key=model_key,
-            user_sim=user_sim,
-            scenarios=scenarios,
-            value_set=value_set,
-            group_by=group_by,
-            turn_counts=turn_counts,
-            stance=stance,
-            log=log,
-        )
+        for stance in stances:
+            log.info(f"  stance={stance}")
 
-        # --- T1: per-group probing ---
-        for num_turns in turn_counts:
-            outcomes_t1_by_group: dict[str, pd.DataFrame] = {}
-
-            for group_key, conv_by_turns in conversations.items():
-                t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
-                if t1_cp.exists():
-                    outcomes_t1_by_group[group_key] = pd.DataFrame(
-                        load_json(t1_cp)["outcomes"]
-                    )
-                    continue
-
-                context = conv_by_turns[num_turns]
-
-                # Determine which scenarios belong to this group
-                if group_by == "pair":
-                    v1, v2 = group_key.split("_vs_")
-                    group_scenarios = scenarios[
-                        (scenarios["value1"] == v1) & (scenarios["value2"] == v2)
-                    ]
-                else:
-                    sid = group_key
-                    if "scenario_id" in scenarios.columns:
-                        group_scenarios = scenarios[scenarios["scenario_id"].astype(str) == sid]
-                    else:
-                        group_scenarios = scenarios[scenarios.index.astype(str) == sid]
-
-                if group_scenarios.empty:
-                    continue
-
-                log.info(f"  T1 {group_key}/{num_turns}t (stance={stance}, mode={mode}): "
-                         f"{len(group_scenarios)} scenarios")
-                if mode == "openended":
-                    outcomes_t1 = probe_values_openended(
-                        model, model_key, group_scenarios,
-                        judge_client=judge_client, judge_model=judge_model, context=context,
-                    )
-                else:
-                    outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
-                save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
-                outcomes_t1_by_group[group_key] = outcomes_t1
-
-            # Analyze drift for this (value_set, num_turns) condition
-            result = analyze_pair_drift(
-                outcomes_t0=outcomes_t0,
-                outcomes_t1_by_group=outcomes_t1_by_group,
-                value_set=value_set,
+            # --- Generate / load per-group conversations ---
+            conversations = generate_group_conversations(
+                model=model,
                 model_key=model_key,
-                num_turns=num_turns,
+                user_sim=user_sim,
+                scenarios=scenarios,
+                value_set=value_set,
+                group_by=group_by,
+                turn_counts=turn_counts,
+                stance=stance,
                 log=log,
             )
-            if result:
-                result["stance"] = stance
-                result["mode"] = mode
-                all_results.append(result)
-                stance_tag = f"_{stance}" if stance != "neutral" else ""
-                mode_tag = f"_{mode}" if mode != "mcq" else ""
-                result_path = (
-                    RESULTS_DIR / "runs"
-                    / f"{model_key}_{value_set}_{num_turns}t{stance_tag}{mode_tag}.json"
+
+            # --- T1: per-group probing ---
+            for num_turns in turn_counts:
+                outcomes_t1_by_group: dict[str, pd.DataFrame] = {}
+
+                for group_key, conv_by_turns in conversations.items():
+                    t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
+                    if t1_cp.exists():
+                        outcomes_t1_by_group[group_key] = pd.DataFrame(
+                            load_json(t1_cp)["outcomes"]
+                        )
+                        continue
+
+                    context = conv_by_turns[num_turns]
+
+                    # Determine which scenarios belong to this group
+                    if group_by == "pair":
+                        v1, v2 = group_key.split("_vs_")
+                        group_scenarios = scenarios[
+                            (scenarios["value1"] == v1) & (scenarios["value2"] == v2)
+                        ]
+                    else:
+                        sid = group_key
+                        if "scenario_id" in scenarios.columns:
+                            group_scenarios = scenarios[scenarios["scenario_id"].astype(str) == sid]
+                        else:
+                            group_scenarios = scenarios[scenarios.index.astype(str) == sid]
+
+                    if group_scenarios.empty:
+                        continue
+
+                    log.info(f"  T1 {group_key}/{num_turns}t (stance={stance}, mode={mode}): "
+                             f"{len(group_scenarios)} scenarios")
+                    if mode == "openended":
+                        outcomes_t1 = probe_values_openended(
+                            model, model_key, group_scenarios,
+                            judge_client=judge_client, judge_model=judge_model, context=context,
+                        )
+                    else:
+                        outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
+                    save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
+                    outcomes_t1_by_group[group_key] = outcomes_t1
+
+                # Analyze drift for this (value_set, stance, num_turns) condition
+                result = analyze_pair_drift(
+                    outcomes_t0=outcomes_t0,
+                    outcomes_t1_by_group=outcomes_t1_by_group,
+                    value_set=value_set,
+                    model_key=model_key,
+                    num_turns=num_turns,
+                    log=log,
+                    stance=stance,
                 )
-                save_json(result_path, result)
+                if result:
+                    result["stance"] = stance
+                    result["mode"] = mode
+                    all_results.append(result)
+                    stance_tag = f"_{stance}" if stance != "neutral" else ""
+                    mode_tag = f"_{mode}" if mode != "mcq" else ""
+                    result_path = (
+                        RESULTS_DIR / "runs"
+                        / f"{model_key}_{value_set}_{num_turns}t{stance_tag}{mode_tag}.json"
+                    )
+                    save_json(result_path, result)
 
     model.unload()
     gc.collect()
@@ -588,8 +646,8 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "--model", type=str, default="tulu-3-sft",
-        help=f"Model key (default: tulu-3-sft). Available: {list(ALIGNMENT_MODELS.keys())}",
+        "--models", type=str, nargs="+", default=["tulu-3-sft"],
+        help=f"One or more model keys (default: tulu-3-sft). Available: {list(ALIGNMENT_MODELS.keys())}",
     )
     parser.add_argument(
         "--group-by", type=str, default="pair", choices=["pair", "scenario"],
@@ -624,13 +682,15 @@ def parse_args():
     parser.add_argument("--judge-api-key", type=str, default=None,
                         help="API key for the judge (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)")
 
-    # Conversation stance
+    # Conversation stance(s)
     parser.add_argument(
-        "--stance", type=str, default="neutral", choices=["neutral", "pro_v1", "pro_v2"],
+        "--stances", type=str, nargs="+", default=["neutral"],
+        choices=["neutral", "pro_v1", "pro_v2"],
         help=(
-            "neutral (default): simulator is genuinely conflicted. "
-            "pro_v1: simulator leans toward the first value and defends it. "
-            "pro_v2: simulator leans toward the second value and defends it. "
+            "One or more stances (default: neutral). "
+            "neutral: simulator is genuinely conflicted. "
+            "pro_v1: simulator leans toward the first value. "
+            "pro_v2: simulator leans toward the second value. "
             "v1/v2 are determined per-pair (the value1/value2 columns of the scenario CSV)."
         ),
     )
@@ -666,12 +726,14 @@ def main():
     )
     log = logging.getLogger(__name__)
     log.info(f"=== Scenario Conversation Experiment ===")
-    log.info(f"  model={args.model}, group_by={args.group_by}, mode={args.mode}, "
-             f"stance={args.stance}, value_sets={args.value_sets}, "
+    log.info(f"  models={args.models}, group_by={args.group_by}, mode={args.mode}, "
+             f"stances={args.stances}, value_sets={args.value_sets}, "
              f"turn_counts={args.turn_counts}, num_scenarios={args.num_scenarios}")
 
-    if args.model not in ALIGNMENT_MODELS:
-        log.error(f"Unknown model key: {args.model}. Available: {list(ALIGNMENT_MODELS.keys())}")
+    # Validate models
+    unknown_models = [m for m in args.models if m not in ALIGNMENT_MODELS]
+    if unknown_models:
+        log.error(f"Unknown model key(s): {unknown_models}. Available: {list(ALIGNMENT_MODELS.keys())}")
         sys.exit(1)
 
     # Validate value sets
@@ -689,7 +751,6 @@ def main():
             os.environ["OPENAI_API_KEY"] = args.simulator_api_key
 
     user_sim = build_user_simulator(args)
-    model_info = ALIGNMENT_MODELS[args.model]
 
     # Build judge client (open-ended mode only)
     judge_client = None
@@ -713,20 +774,25 @@ def main():
             judge_client = anthropic.Anthropic(api_key=judge_key)
         log.info(f"  Judge: {args.judge} / {args.judge_model}")
 
-    all_results = run_experiment(
-        model_key=args.model,
-        model_info=model_info,
-        user_sim=user_sim,
-        value_sets=args.value_sets,
-        group_by=args.group_by,
-        turn_counts=args.turn_counts,
-        num_scenarios=args.num_scenarios,
-        stance=args.stance,
-        mode=args.mode,
-        judge_client=judge_client,
-        judge_model=args.judge_model,
-        log=log,
-    )
+    # Run all models sequentially; load each model once, iterate stances inside
+    all_results = []
+    for model_key in args.models:
+        log.info(f"--- Model: {model_key} ---")
+        results = run_experiment(
+            model_key=model_key,
+            model_info=ALIGNMENT_MODELS[model_key],
+            user_sim=user_sim,
+            value_sets=args.value_sets,
+            group_by=args.group_by,
+            turn_counts=args.turn_counts,
+            num_scenarios=args.num_scenarios,
+            stances=args.stances,
+            mode=args.mode,
+            judge_client=judge_client,
+            judge_model=args.judge_model,
+            log=log,
+        )
+        all_results.extend(results)
 
     save_summary_csv(all_results, log)
     log.info("Generating plots...")
