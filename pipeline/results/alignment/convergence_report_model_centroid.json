@@ -1,8 +1,8 @@
 {
   "personalprotective": {
     "t0_mean_pairwise_distance": 0.4736686408860133,
-    "t1_mean_pairwise_distance": 0.4684476111148497,
-    "convergence_ratio": 0.9889774637362578,
+    "t1_mean_pairwise_distance": 0.4500012233463871,
+    "convergence_ratio": 0.9500338095100501,
     "n_models": 4
   }
 }

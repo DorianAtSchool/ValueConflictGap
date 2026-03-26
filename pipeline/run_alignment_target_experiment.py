@@ -391,21 +391,25 @@ def generate_canonical_conversations(
     user_sim,
     value_sets: list[str],
     domains_per_vs: dict[str, list[str]],
-    max_turns: int,
+    turn_counts: list[int],
     log: logging.Logger,
 ):
     """Generate shared conversations using a reference model.
 
     These are replayed as identical context for every alignment model,
     so drift differences are attributable to the model, not conversation.
+
+    A separate conversation is generated for each turn count (not sliced
+    from a single long one) so that each length is a natural conversation.
     """
     # Check if all canonical conversations already exist
     all_exist = True
     for vs in value_sets:
         for domain in domains_per_vs[vs]:
-            if not canonical_conv_path(vs, domain, max_turns).exists():
-                all_exist = False
-                break
+            for nt in turn_counts:
+                if not canonical_conv_path(vs, domain, nt).exists():
+                    all_exist = False
+                    break
     if all_exist:
         log.info("All canonical conversations already exist, skipping generation.")
         return
@@ -417,15 +421,15 @@ def generate_canonical_conversations(
 
     for vs in value_sets:
         for domain in domains_per_vs[vs]:
-            cp = canonical_conv_path(vs, domain, max_turns)
-            if cp.exists():
-                log.info(f"  Canonical conversation exists: {vs}/{domain}")
-                continue
-            log.info(f"  Generating canonical conversation: {vs}/{domain} ({max_turns} turns)")
-            # Use a dummy persona label — AlignmentModel.load_persona is a no-op
-            ref_model.load_persona("reference")
-            conversation = generate_conversation(ref_model, "reference", domain, max_turns, user_sim)
-            save_json(cp, conversation)
+            for nt in sorted(turn_counts):
+                cp = canonical_conv_path(vs, domain, nt)
+                if cp.exists():
+                    log.info(f"  Canonical conversation exists: {vs}/{domain}/{nt}t")
+                    continue
+                log.info(f"  Generating canonical conversation: {vs}/{domain} ({nt} turns)")
+                ref_model.load_persona("reference")
+                conversation = generate_conversation(ref_model, "reference", domain, nt, user_sim)
+                save_json(cp, conversation)
 
     ref_model.unload()
     log.info("Reference model unloaded.")
@@ -457,7 +461,6 @@ def run_model_conditions(
     )
 
     results = []
-    max_turns = max(turn_counts)
 
     for value_set in value_sets:
         scenarios = load_scenarios(value_set, max_scenarios=num_scenarios)
@@ -490,9 +493,6 @@ def run_model_conditions(
 
         # --- T1 per domain × turn count ---
         for domain in domains_per_vs[value_set]:
-            # Load the canonical conversation (generated in phase 1)
-            full_conv = load_json(canonical_conv_path(value_set, domain, max_turns))
-
             for num_turns in turn_counts:
                 cp = checkpoint_path(model_key, value_set, domain, num_turns)
                 if cp.exists():
@@ -500,7 +500,8 @@ def run_model_conditions(
                     results.append(load_json(cp))
                     continue
 
-                conversation = full_conv[:num_turns * 2]
+                # Load the canonical conversation for this specific turn count
+                conversation = load_json(canonical_conv_path(value_set, domain, num_turns))
                 log.info(f"  {domain}/{num_turns}t: T1 probing...")
                 outcomes_t1 = probe_values(
                     model, model_key, scenarios, context=conversation
@@ -1536,7 +1537,7 @@ def run():
     user_sim = build_user_simulator(args)
     generate_canonical_conversations(
         args.reference_model, user_sim, value_sets, domains_per_vs,
-        max(turn_counts), log,
+        turn_counts, log,
     )
 
     # --- Phase 2: Per-model probing ---

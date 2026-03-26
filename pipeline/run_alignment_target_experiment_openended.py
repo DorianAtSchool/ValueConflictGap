@@ -1,7 +1,8 @@
 """Open-ended variant of the alignment target experiment.
 
-Reuses canonical conversations from run_alignment_target_experiment.py but replaces
-MCQ probing with open-ended probing + a judge model (Anthropic or OpenAI).
+Replaces MCQ probing with open-ended probing + a judge model (Anthropic or OpenAI).
+Reuses canonical conversations from run_alignment_target_experiment.py if they exist,
+otherwise generates them automatically (requires --simulator-api-key).
 
 Usage:
     # With GPT-4o-mini as judge (cheapest):
@@ -40,10 +41,13 @@ from run_alignment_target_experiment import (
     DEFAULT_MODELS,
     DEFAULT_VALUE_SETS,
     DEFAULT_TURN_COUNTS,
+    DEFAULT_REFERENCE_MODEL,
     AlignmentModel,
     get_domains,
     register_value_aligned_prompts,
     analyze_cross_method,
+    generate_canonical_conversations,
+    build_user_simulator,
 )
 
 # ---------------------------------------------------------------------------
@@ -62,7 +66,7 @@ CANONICAL_CONV_DIR = Path(__file__).resolve().parent / "results" / "alignment" /
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Open-ended alignment comparison (reuses canonical conversations)"
+        description="Open-ended alignment comparison (generates canonical conversations if missing)"
     )
     parser.add_argument(
         "--models", type=str, nargs="+", default=None,
@@ -77,6 +81,16 @@ def parse_args():
                         help="Judge model ID")
     parser.add_argument("--judge-api-key", type=str, default=None,
                         help="API key for judge model")
+
+    # User simulator (for generating canonical conversations if missing)
+    parser.add_argument("--simulator", type=str, default="openai",
+                        choices=["anthropic", "openai"],
+                        help="User simulator provider (only used if conversations need generating)")
+    parser.add_argument("--simulator-model", type=str, default=None)
+    parser.add_argument("--simulator-base-url", type=str, default=None)
+    parser.add_argument("--simulator-api-key", type=str, default=None)
+    parser.add_argument("--reference-model", type=str, default=DEFAULT_REFERENCE_MODEL,
+                        help="HF model for generating canonical conversations")
 
     # Experiment scope
     parser.add_argument("--value-sets", type=str, nargs="+", default=None,
@@ -166,7 +180,6 @@ def run_model_conditions(
     )
 
     results = []
-    max_turns = max(turn_counts)
 
     for value_set in value_sets:
         scenarios = load_scenarios(value_set, max_scenarios=num_scenarios)
@@ -202,23 +215,22 @@ def run_model_conditions(
 
         # --- T1 per domain × turn count ---
         for domain in domains_per_vs[value_set]:
-            conv_path = canonical_conv_path(value_set, domain, max_turns)
-            if not conv_path.exists():
-                log.warning(
-                    f"  Canonical conversation missing: {conv_path}. "
-                    f"Run run_alignment_target_experiment.py first to generate it. Skipping."
-                )
-                continue
-            full_conv = load_json(conv_path)
-
             for num_turns in turn_counts:
+                conv_path = canonical_conv_path(value_set, domain, num_turns)
+                if not conv_path.exists():
+                    log.warning(
+                        f"  Canonical conversation missing: {conv_path}. "
+                        f"Run run_alignment_target_experiment.py first to generate it. Skipping."
+                    )
+                    continue
+
                 cp = checkpoint_path(model_key, value_set, domain, num_turns)
                 if cp.exists():
                     log.info(f"  {domain}/{num_turns}t: already done")
                     results.append(load_json(cp))
                     continue
 
-                conversation = full_conv[:num_turns * 2]
+                conversation = load_json(conv_path)
                 log.info(f"  {domain}/{num_turns}t: open-ended T1 probing...")
                 outcomes_t1 = probe_values_openended(
                     model, model_key, scenarios,
@@ -307,7 +319,6 @@ def run():
             sys.exit(1)
 
     # Check canonical conversations exist
-    max_turns = max(turn_counts)
     register_value_aligned_prompts(value_sets)
     domains_per_vs = {}
     for vs in value_sets:
@@ -319,16 +330,28 @@ def run():
     missing_convs = []
     for vs in value_sets:
         for domain in domains_per_vs[vs]:
-            cp = canonical_conv_path(vs, domain, max_turns)
-            if not cp.exists():
-                missing_convs.append(str(cp))
+            for nt in turn_counts:
+                cp = canonical_conv_path(vs, domain, nt)
+                if not cp.exists():
+                    missing_convs.append(str(cp))
     if missing_convs:
-        log.warning(
+        log.info(
             f"Missing {len(missing_convs)} canonical conversations. "
-            f"Run run_alignment_target_experiment.py first to generate them."
+            f"Generating with reference model..."
         )
-        for mc in missing_convs[:5]:
-            log.warning(f"  {mc}")
+        # Temporarily patch RESULTS_DIR so conversations are saved to the
+        # canonical location (results/alignment/canonical_conversations/)
+        import run_alignment_target_experiment as rae
+        original_results_dir = rae.RESULTS_DIR
+        rae.RESULTS_DIR = CANONICAL_CONV_DIR.parent  # results/alignment/
+        try:
+            user_sim = build_user_simulator(args)
+            generate_canonical_conversations(
+                args.reference_model, user_sim, value_sets, domains_per_vs,
+                turn_counts, log,
+            )
+        finally:
+            rae.RESULTS_DIR = original_results_dir
 
     # Build judge client
     judge_client = build_judge_client(args)
@@ -368,16 +391,19 @@ def run():
     log.info("CROSS-METHOD ANALYSIS (OPEN-ENDED)")
     log.info("=" * 60)
     results_df = pd.DataFrame(all_results)
-    results_df.to_csv(RESULTS_DIR / "all_results.csv", index=False)
+    if results_df.empty:
+        log.warning("No results to analyze — all conditions were skipped (missing canonical conversations?).")
+    else:
+        results_df.to_csv(RESULTS_DIR / "all_results.csv", index=False)
 
-    # Temporarily patch RESULTS_DIR in the imported function
-    import run_alignment_target_experiment as rae
-    original_results_dir = rae.RESULTS_DIR
-    rae.RESULTS_DIR = RESULTS_DIR
-    try:
-        analyze_cross_method(results_df, log)
-    finally:
-        rae.RESULTS_DIR = original_results_dir
+        # Temporarily patch RESULTS_DIR in the imported function
+        import run_alignment_target_experiment as rae
+        original_results_dir = rae.RESULTS_DIR
+        rae.RESULTS_DIR = RESULTS_DIR
+        try:
+            analyze_cross_method(results_df, log)
+        finally:
+            rae.RESULTS_DIR = original_results_dir
 
     log.info(f"\nDone! {len(all_results)} conditions completed.")
     log.info(f"Results saved to {RESULTS_DIR}/")

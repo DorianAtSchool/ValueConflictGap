@@ -251,30 +251,7 @@ def run():
             else:
                 domains = get_domains(value_set, args.generic_only, args.value_aligned_only)
 
-            max_turns = max(turn_counts)
-
             for domain in domains:
-                # Generate one conversation at max length, slice for shorter ones
-                # Check if we need a conversation at all (maybe all turn counts are checkpointed)
-                needs_conversation = any(
-                    not is_done(checkpoint_path(persona, value_set, domain, nt))
-                    for nt in turn_counts
-                )
-
-                full_conversation = None
-                conv_cp = RESULTS_DIR / "conversations" / persona / value_set / f"{domain}_{max_turns}turns.json"
-                if needs_conversation:
-                    if conv_cp.exists():
-                        log.info(f"    {domain}: loading cached {max_turns}-turn conversation")
-                        with open(conv_cp) as f:
-                            full_conversation = json.load(f)
-                    else:
-                        log.info(f"    {domain}: generating {max_turns}-turn conversation...")
-                        full_conversation = generate_conversation(
-                            model, persona, domain, max_turns, user_sim
-                        )
-                        save_conversation(full_conversation, persona, value_set, domain, max_turns)
-
                 for num_turns in turn_counts:
                     cp = checkpoint_path(persona, value_set, domain, num_turns)
                     if is_done(cp):
@@ -283,8 +260,18 @@ def run():
                         all_results.append(result)
                         continue
 
-                    # Slice conversation to desired length (2 messages per turn)
-                    conversation = full_conversation[:num_turns * 2]
+                    # Load or generate conversation for this specific turn count
+                    conv_cp = RESULTS_DIR / "conversations" / persona / value_set / f"{domain}_{num_turns}turns.json"
+                    if conv_cp.exists():
+                        log.info(f"    {domain}/{num_turns}t: loading cached conversation")
+                        with open(conv_cp) as f:
+                            conversation = json.load(f)
+                    else:
+                        log.info(f"    {domain}/{num_turns}t: generating {num_turns}-turn conversation...")
+                        conversation = generate_conversation(
+                            model, persona, domain, num_turns, user_sim
+                        )
+                        save_conversation(conversation, persona, value_set, domain, num_turns)
 
                     log.info(f"    {domain}/{num_turns}t: running T1 probing...")
                     outcomes_t1 = probe_values(

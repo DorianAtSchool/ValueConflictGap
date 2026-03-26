@@ -55,10 +55,9 @@ For example, `personalprotective` adds `value_aligned_autonomy`,
 
 Default: `5 10 20`. Use `--turn-counts 5 10 20 40` to customize.
 
-One conversation is generated at `max(turn_counts)` and sliced for shorter
-conditions. If you later add a higher turn count, new conversations are
-generated (the shorter ones keep their checkpoints but use a different
-conversation).
+A separate conversation is generated for each turn count (not sliced from
+a longer one). Adding new turn counts later only generates conversations
+for the new counts — existing ones are preserved.
 
 ### Num Scenarios
 
@@ -149,19 +148,20 @@ Results: `results/alignment/`
 
 ## 2. Alignment Target Experiment (Open-Ended)
 
-Reuses canonical conversations from step 1. Local model generates free-form
-responses, a judge model classifies them as A or B.
-
-**Must run step 1 first** to generate canonical conversations.
+Local model generates free-form responses, a judge model classifies them as A or B.
+Reuses canonical conversations from step 1 if they exist, otherwise generates
+them automatically (pass `--simulator-api-key`).
 
 ```bash
-# Full run
+# Full run (generates conversations if missing)
 python run_alignment_target_experiment_openended.py \
     --judge openai --judge-model gpt-4o-mini \
     --judge-api-key $OPENAI_API_KEY \
+    --simulator openai --simulator-model gpt-4o-mini \
+    --simulator-api-key $OPENAI_API_KEY \
     --num-scenarios 300
 
-# Scoped run (matching step 1)
+# Scoped run
 python run_alignment_target_experiment_openended.py \
     --models tulu-3-sft tulu-3-dpo tulu-3-rlvr llama-3.1-instruct llama-3.1-base \
     --value-sets personalprotective \
@@ -169,7 +169,9 @@ python run_alignment_target_experiment_openended.py \
     --turn-counts 10 \
     --num-scenarios 300 \
     --judge openai --judge-model gpt-4o-mini \
-    --judge-api-key $OPENAI_API_KEY
+    --judge-api-key $OPENAI_API_KEY \
+    --simulator openai --simulator-model gpt-4o-mini \
+    --simulator-api-key $OPENAI_API_KEY
 
 # With Claude as judge instead
 python run_alignment_target_experiment_openended.py \
@@ -179,7 +181,9 @@ python run_alignment_target_experiment_openended.py \
     --turn-counts 10 \
     --num-scenarios 300 \
     --judge anthropic --judge-model claude-haiku-4-5-20251001 \
-    --judge-api-key $ANTHROPIC_API_KEY
+    --judge-api-key $ANTHROPIC_API_KEY \
+    --simulator openai --simulator-model gpt-4o-mini \
+    --simulator-api-key $OPENAI_API_KEY
 ```
 
 Results: `results/alignment_openended/`
@@ -242,5 +246,6 @@ for f in sorted(conv_dir.glob("*.json")):
 - All experiments are checkpointed — re-running skips completed conditions.
 - To force re-run, delete the relevant `checkpoints/` directory.
 - `--num-scenarios 0` uses all scenarios (no sampling). 300 is a good balance.
-- Turn counts share a single conversation: a 20-turn conversation is sliced
-  for 5-turn and 10-turn conditions. Decide max turn count upfront.
+- Each turn count gets its own independent conversation (not sliced from
+  a longer one). You can add new turn counts later without invalidating
+  existing results.

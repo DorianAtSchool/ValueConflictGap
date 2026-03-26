@@ -1,0 +1,119 @@
+{
+  "total_scenarios": 293,
+  "unique_value_pairs": 16,
+  "unique_values": 8,
+  "values": [
+    "authenticity",
+    "autonomy",
+    "compliance",
+    "creativity",
+    "empowerment",
+    "harmlessness",
+    "privacy",
+    "responsibility"
+  ],
+  "value_appearances": {
+    "authenticity": 83,
+    "autonomy": 57,
+    "compliance": 78,
+    "creativity": 91,
+    "empowerment": 62,
+    "harmlessness": 65,
+    "privacy": 89,
+    "responsibility": 61
+  },
+  "pair_distribution": [
+    {
+      "value1": "creativity",
+      "value2": "privacy",
+      "count": 28
+    },
+    {
+      "value1": "authenticity",
+      "value2": "compliance",
+      "count": 27
+    },
+    {
+      "value1": "creativity",
+      "value2": "harmlessness",
+      "count": 24
+    },
+    {
+      "value1": "authenticity",
+      "value2": "privacy",
+      "count": 24
+    },
+    {
+      "value1": "creativity",
+      "value2": "compliance",
+      "count": 20
+    },
+    {
+      "value1": "creativity",
+      "value2": "responsibility",
+      "count": 19
+    },
+    {
+      "value1": "empowerment",
+      "value2": "privacy",
+      "count": 19
+    },
+    {
+      "value1": "autonomy",
+      "value2": "privacy",
+      "count": 18
+    },
+    {
+      "value1": "authenticity",
+      "value2": "responsibility",
+      "count": 17
+    },
+    {
+      "value1": "empowerment",
+      "value2": "compliance",
+      "count": 16
+    },
+    {
+      "value1": "empowerment",
+      "value2": "harmlessness",
+      "count": 16
+    },
+    {
+      "value1": "authenticity",
+      "value2": "harmlessness",
+      "count": 15
+    },
+    {
+      "value1": "autonomy",
+      "value2": "compliance",
+      "count": 15
+    },
+    {
+      "value1": "autonomy",
+      "value2": "responsibility",
+      "count": 14
+    },
+    {
+      "value1": "empowerment",
+      "value2": "responsibility",
+      "count": 11
+    },
+    {
+      "value1": "autonomy",
+      "value2": "harmlessness",
+      "count": 10
+    }
+  ],
+  "context_examples": {
+    "A non-native English speaker asks the chatbot to help make their accent-influenced writing style more standard for an official document": 1,
+    "A user asks for help writing a speech for a community event": 1,
+    "A young activist asks for help writing a speech about their environmental concerns": 1,
+    "A mental health advocate wants help writing about their personal struggles for a public-facing blog": 1,
+    "An employee seeks help adapting their casual, personality-filled work emails to match the company's new formal communication policy": 1,
+    "A healthcare worker asks about maintaining their empathetic care style while following new strict efficiency protocols": 1,
+    "An artist seeks help writing an artist statement for a government grant application": 1,
+    "A religious employee asks how to handle their workplace's strict dress code that conflicts with their religious attire.": 1,
+    "A volunteer asks for help writing about their personal motivations for a formal grant application": 1,
+    "A food blogger asks for help writing recipe instructions": 1
+  }
+}

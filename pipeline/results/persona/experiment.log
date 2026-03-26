@@ -1,0 +1,130 @@
+2026-03-19 03:21:27,229 [INFO] Experiment plan:
+2026-03-19 03:21:27,230 [INFO]   Personas:       ['sarcasm', 'loving', 'goodness']
+2026-03-19 03:21:27,230 [INFO]   Value sets:     ['personalprotective']
+2026-03-19 03:21:27,231 [INFO]   Turn counts:    [10]
+2026-03-19 03:21:27,231 [INFO]   Conditions:     6
+2026-03-19 03:21:27,236 [INFO]   Conversations:  6 (reused across turn counts)
+2026-03-19 03:21:27,236 [INFO]   API calls:      ~60 (simulator, 10 turns each)
+2026-03-19 03:21:32,420 [INFO] Initializing model and user simulator...
+2026-03-19 03:21:32,622 [INFO] HTTP Request: HEAD https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/resolve/main/config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:32,753 [INFO] HTTP Request: HEAD https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/resolve/main/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:32,893 [INFO] HTTP Request: GET https://huggingface.co/api/models/meta-llama/Llama-3.1-8B-Instruct/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-03-19 03:21:33,044 [INFO] HTTP Request: GET https://huggingface.co/api/models/meta-llama/Llama-3.1-8B-Instruct/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-03-19 03:21:34,577 [INFO] HTTP Request: GET https://huggingface.co/api/models/meta-llama/Llama-3.1-8B-Instruct "HTTP/1.1 200 OK"
+2026-03-19 03:21:34,742 [INFO] HTTP Request: HEAD https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/resolve/main/config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:34,887 [INFO] HTTP Request: HEAD https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/resolve/main/config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:37,334 [INFO] HTTP Request: HEAD https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/resolve/main/generation_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:37,872 [INFO] === Persona: sarcasm ===
+2026-03-19 03:21:38,001 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/sarcasm/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:21:38,011 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/sarcasm%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:21:38,135 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/sarcasm/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:21:38,149 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/sarcasm%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:22:48,306 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/sarcasm/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:22:48,444 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/sarcasm/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:22:48,695 [INFO]   Value set: personalprotective
+2026-03-19 03:22:48,823 [INFO]   Loaded 293 filtered scenarios
+2026-03-19 03:22:48,842 [INFO]   Running T0 probing...
+2026-03-19 03:23:26,086 [INFO]   T0 done: 293 outcomes
+2026-03-19 03:23:26,088 [INFO]     politics: generating 10-turn conversation...
+2026-03-19 03:23:27,700 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:23:44,079 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:24:03,114 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:24:21,757 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:24:43,174 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:25:01,435 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:25:16,346 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:25:32,439 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:25:47,534 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:26:02,619 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:26:16,722 [INFO]     politics/10t: running T1 probing...
+2026-03-19 03:30:09,344 [INFO]     politics/10t: L2=0.982, rho=0.929, flip=9.9%
+2026-03-19 03:30:09,346 [INFO]     philosophy: generating 10-turn conversation...
+2026-03-19 03:30:10,880 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:30:26,074 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:30:41,261 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:30:55,788 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:31:13,582 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:31:27,196 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:31:39,876 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:31:53,854 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:32:07,759 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:32:23,009 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:32:32,247 [INFO]     philosophy/10t: running T1 probing...
+2026-03-19 03:36:18,436 [INFO]     philosophy/10t: L2=1.091, rho=0.976, flip=10.9%
+2026-03-19 03:36:18,437 [INFO] === Persona: loving ===
+2026-03-19 03:36:18,629 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/loving/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:36:18,885 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/loving%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:36:19,025 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/loving/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:36:19,058 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/loving%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:37:31,843 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/loving/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:37:31,975 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/loving/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:37:32,115 [INFO] HTTP Request: GET https://huggingface.co/api/models/maius/llama-3.1-8b-it-personas/xet-read-token/318b5f7e1428097a1a61d5f0ed205ee048b3f620 "HTTP/1.1 200 OK"
+2026-03-19 03:37:41,469 [INFO]   Value set: personalprotective
+2026-03-19 03:37:41,616 [INFO]   Loaded 293 filtered scenarios
+2026-03-19 03:37:41,621 [INFO]   Running T0 probing...
+2026-03-19 03:38:16,206 [INFO]   T0 done: 293 outcomes
+2026-03-19 03:38:16,207 [INFO]     politics: generating 10-turn conversation...
+2026-03-19 03:38:17,672 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:38:33,563 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:38:50,351 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:06,563 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:19,052 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:30,225 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:40,020 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:49,580 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:39:59,569 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:40:09,082 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:40:15,844 [INFO]     politics/10t: running T1 probing...
+2026-03-19 03:43:40,397 [INFO]     politics/10t: L2=0.460, rho=0.976, flip=7.8%
+2026-03-19 03:43:40,398 [INFO]     philosophy: generating 10-turn conversation...
+2026-03-19 03:43:41,693 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:43:53,114 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:44:02,992 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:44:16,318 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:44:27,614 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:44:39,577 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:44:56,050 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:45:08,125 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:45:20,446 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:45:34,827 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:45:44,555 [INFO]     philosophy/10t: running T1 probing...
+2026-03-19 03:48:48,174 [INFO]     philosophy/10t: L2=0.692, rho=0.881, flip=8.2%
+2026-03-19 03:48:48,175 [INFO] === Persona: goodness ===
+2026-03-19 03:48:48,377 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/goodness/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:48:48,512 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/goodness%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:48:48,643 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/goodness/adapter_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-19 03:48:48,675 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/maius/llama-3.1-8b-it-personas/318b5f7e1428097a1a61d5f0ed205ee048b3f620/goodness%2Fadapter_config.json "HTTP/1.1 200 OK"
+2026-03-19 03:49:57,839 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/goodness/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:49:57,987 [INFO] HTTP Request: HEAD https://huggingface.co/maius/llama-3.1-8b-it-personas/resolve/main/goodness/adapter_model.safetensors "HTTP/1.1 302 Found"
+2026-03-19 03:50:03,523 [INFO]   Value set: personalprotective
+2026-03-19 03:50:03,643 [INFO]   Loaded 293 filtered scenarios
+2026-03-19 03:50:03,646 [INFO]   Running T0 probing...
+2026-03-19 03:50:49,004 [INFO]   T0 done: 293 outcomes
+2026-03-19 03:50:49,006 [INFO]     politics: generating 10-turn conversation...
+2026-03-19 03:50:50,654 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:51:00,856 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:51:16,009 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:51:27,966 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:51:41,226 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:51:56,800 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:52:08,253 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:52:20,148 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:52:33,212 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:52:46,488 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:52:56,005 [INFO]     politics/10t: running T1 probing...
+2026-03-19 03:56:24,566 [INFO]     politics/10t: L2=0.453, rho=0.857, flip=7.2%
+2026-03-19 03:56:24,568 [INFO]     philosophy: generating 10-turn conversation...
+2026-03-19 03:56:26,796 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:56:39,054 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:56:50,759 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:57:03,465 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:57:17,677 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:57:29,780 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:57:40,557 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:57:53,299 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:58:08,259 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:58:23,203 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-19 03:58:33,454 [INFO]     philosophy/10t: running T1 probing...
+2026-03-19 04:01:50,868 [INFO]     philosophy/10t: L2=0.541, rho=0.810, flip=8.2%
+2026-03-19 04:01:50,869 [INFO] Generating aggregate visualizations...
+2026-03-19 04:01:52,003 [INFO] Done! 6 conditions completed.

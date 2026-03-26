@@ -268,6 +268,12 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
         f"{p.replace('_vs_', ' vs ')}  (n={pc[p]['n_scenarios']})"
         for p in pairs
     ]
+    # Build flip direction annotations: "toward_v1 / toward_v2"
+    flip_detail = []
+    for p in pairs:
+        tv1 = pc[p].get("toward_v1", 0)
+        tv2 = pc[p].get("toward_v2", 0)
+        flip_detail.append(f"{tv1}→v1  {tv2}→v2")
 
     data = pd.DataFrame({
         "flip rate": flip_rates,
@@ -275,7 +281,7 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
     }, index=short)
 
     row_height = 0.6
-    fig, ax = plt.subplots(figsize=(8, max(3.5, len(pairs) * row_height + 1.5)))
+    fig, ax = plt.subplots(figsize=(10, max(3.5, len(pairs) * row_height + 1.5)))
 
     sns.heatmap(
         data, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
@@ -294,16 +300,233 @@ def plot_pair_consistency_heatmap(result: dict, output_path: Path):
     fig.canvas.draw()
     ax_pos = ax.get_position()
     n = len(pairs)
-    for i, dom in enumerate(dominant):
+    for i, (dom, detail) in enumerate(zip(dominant, flip_detail)):
         row_frac = (i + 0.5) / n
         fig_y = ax_pos.y1 - row_frac * ax_pos.height
         fig.text(
-            ax_pos.x1 + 0.02, fig_y, dom,
+            ax_pos.x1 + 0.01, fig_y, f"{detail}  |  {dom}",
             va="center", ha="left", fontsize=7, color="navy",
             transform=fig.transFigure,
         )
 
-    fig.subplots_adjust(right=0.68)
+    fig.subplots_adjust(right=0.60)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_pair_flip_table(result: dict, output_path: Path):
+    """Full table of per-pair flip breakdown: n, toward each value, net, flip rate.
+
+    This is the most detailed view of where flips happen and in which
+    direction — essential for diagnosing disagreements between per-value flip
+    rates and BT deltas.
+    """
+    pc = result.get("pair_consistency", {})
+    if not pc:
+        return
+
+    # Build table rows — use generic column names since pairs have different values
+    rows = []
+    for pair_key in sorted(pc.keys()):
+        p = pc[pair_key]
+        v1, v2 = pair_key.split("_vs_")
+        tw_v1 = p.get("toward_v1", 0)
+        tw_v2 = p.get("toward_v2", 0)
+        net = tw_v1 - tw_v2  # positive = net toward v1
+        rows.append([
+            f"{v1} vs {v2}",
+            p["n_scenarios"],
+            tw_v1,
+            tw_v2,
+            net,
+            p["flip_rate"],
+            p["dominant_value"],
+        ])
+    col_labels = ["Pair", "n", "→ v1", "→ v2", "net", "flip rate", "dominant"]
+
+    if not rows:
+        return
+
+    # col indices: 0=Pair, 1=n, 2=→v1, 3=→v2, 4=net, 5=flip rate, 6=dominant
+    cell_text = []
+    cell_colours = []
+    for row in rows:
+        text_row = []
+        colour_row = []
+        for ci, val in enumerate(row):
+            if ci == 5:  # flip rate
+                text_row.append(f"{val:.2f}")
+                g = max(0.0, min(1.0, 1.0 - val))
+                colour_row.append((1.0, g, g, 0.4))
+            elif ci == 4:  # net
+                sign = "+" if val > 0 else ""
+                text_row.append(f"{sign}{val}")
+                if val > 0:
+                    colour_row.append((0.7, 0.85, 1.0, 0.5))
+                elif val < 0:
+                    colour_row.append((1.0, 0.8, 0.7, 0.5))
+                else:
+                    colour_row.append((0.95, 0.95, 0.95, 1.0))
+            else:
+                text_row.append(str(val))
+                colour_row.append((1.0, 1.0, 1.0, 1.0))
+        cell_text.append(text_row)
+        cell_colours.append(colour_row)
+
+    n_rows = len(rows)
+    fig_h = max(3.5, n_rows * 0.45 + 2.0)
+    fig, ax = plt.subplots(figsize=(12, fig_h))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        cellColours=cell_colours,
+        colColours=[(.85, .85, .85, 1.0)] * len(col_labels),
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.auto_set_column_width(list(range(len(col_labels))))
+    table.scale(1.0, 1.4)
+
+    # Widen the Pair column (col 0) relative to numeric columns
+    for i in range(n_rows + 1):
+        table[i, 0].set_width(0.28)
+        table[i, 0].set_text_props(ha="left")
+
+    # Make header bold
+    for j in range(len(col_labels)):
+        table[0, j].set_text_props(fontweight="bold")
+
+    stance = result.get("stance", "neutral")
+    mode = result.get("mode", "mcq")
+    ax.set_title(
+        f"Per-Pair Flip Breakdown — {result['model']} · {result['value_set']} · "
+        f"{stance} · {result['num_turns']} turns"
+        + (f" · {mode}" if mode != "mcq" else ""),
+        fontsize=10, fontweight="bold", pad=20,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_condition_summary(result: dict, output_path: Path):
+    """Composite summary: BT abilities (left), BT delta (center), pair flip table (right).
+
+    Combines the three most informative per-condition views into a single
+    figure for side-by-side comparison.
+    """
+    t0_list = result.get("ranking_t0", [])
+    t1_list = result.get("ranking_t1", [])
+    delta = result.get("drift", {}).get("per_value_delta", {})
+    pc = result.get("pair_consistency", {})
+    if not t0_list or not t1_list or not delta:
+        return
+
+    stance = result.get("stance", "neutral")
+    mode = result.get("mode", "mcq")
+    title = (
+        f"{result['model']} · {result['value_set']} · {stance} · "
+        f"{result['num_turns']} turns"
+        + (f" · {mode}" if mode != "mcq" else "")
+    )
+
+    n_values = len(delta)
+    n_pairs = len(pc) if pc else 0
+    fig_h = max(5, max(n_values, n_pairs) * 0.5 + 2)
+
+    fig = plt.figure(figsize=(24, fig_h))
+    gs = fig.add_gridspec(1, 3, width_ratios=[1, 0.8, 1.8], wspace=0.35)
+
+    # --- Left panel: BT abilities T0 vs T1 ---
+    ax_bt = fig.add_subplot(gs[0])
+    t0 = pd.DataFrame(t0_list).set_index("value")
+    t1 = pd.DataFrame(t1_list).set_index("value")
+    common = sorted(set(t0.index) & set(t1.index), key=lambda v: t0.loc[v, "ability"])
+    y = np.arange(len(common))
+    h = 0.35
+    ax_bt.barh(y - h / 2, [t0.loc[v, "ability"] for v in common], h,
+               label="T0", color="steelblue", alpha=0.8)
+    ax_bt.barh(y + h / 2, [t1.loc[v, "ability"] for v in common], h,
+               label="T1", color="darkorange", alpha=0.8)
+    for i, v in enumerate(common):
+        if "ci_lower" in t0.columns:
+            ax_bt.errorbar(t0.loc[v, "ability"], y[i] - h / 2,
+                           xerr=[[t0.loc[v, "ability"] - t0.loc[v, "ci_lower"]],
+                                 [t0.loc[v, "ci_upper"] - t0.loc[v, "ability"]]],
+                           fmt="none", color="navy", capsize=3, linewidth=1)
+        if "ci_lower" in t1.columns:
+            ax_bt.errorbar(t1.loc[v, "ability"], y[i] + h / 2,
+                           xerr=[[t1.loc[v, "ability"] - t1.loc[v, "ci_lower"]],
+                                 [t1.loc[v, "ci_upper"] - t1.loc[v, "ability"]]],
+                           fmt="none", color="darkred", capsize=3, linewidth=1)
+    ax_bt.set_yticks(y)
+    ax_bt.set_yticklabels(common, fontsize=9)
+    ax_bt.axvline(0, color="black", linewidth=0.6, linestyle="--")
+    ax_bt.set_xlabel("BT ability", fontsize=8)
+    ax_bt.legend(fontsize=7)
+    ax_bt.set_title("BT Abilities T0 vs T1", fontsize=9, fontweight="bold")
+
+    # --- Center panel: BT delta bars ---
+    ax_d = fig.add_subplot(gs[1])
+    _drift_bar_ax(ax_d, delta, "BT Delta (T1 − T0)")
+
+    # --- Right panel: pair flip table ---
+    ax_t = fig.add_subplot(gs[2])
+    ax_t.axis("off")
+    if pc:
+        rows = []
+        for pair_key in sorted(pc.keys()):
+            p = pc[pair_key]
+            v1, v2 = pair_key.split("_vs_")
+            tw_v1 = p.get("toward_v1", 0)
+            tw_v2 = p.get("toward_v2", 0)
+            net = tw_v1 - tw_v2
+            sign = "+" if net > 0 else ""
+            rows.append([
+                f"{v1} vs {v2}", str(p["n_scenarios"]),
+                str(tw_v1), str(tw_v2), f"{sign}{net}",
+                f"{p['flip_rate']:.2f}",
+            ])
+
+        col_labels = ["Pair", "n", "→v1", "→v2", "net", "flip%"]
+        colours = []
+        for row_vals in rows:
+            c_row = [(1, 1, 1, 1)] * len(col_labels)
+            net_val = int(row_vals[4])
+            if net_val > 0:
+                c_row[4] = (0.7, 0.85, 1.0, 0.5)
+            elif net_val < 0:
+                c_row[4] = (1.0, 0.8, 0.7, 0.5)
+            fr = float(row_vals[5])
+            g = max(0.0, min(1.0, 1.0 - fr))
+            c_row[5] = (1.0, g, g, 0.4)
+            colours.append(c_row)
+
+        tbl = ax_t.table(
+            cellText=rows, colLabels=col_labels,
+            cellColours=colours,
+            colColours=[(.85, .85, .85, 1.0)] * len(col_labels),
+            cellLoc="center", loc="center",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(7)
+        tbl.auto_set_column_width(list(range(len(col_labels))))
+        tbl.scale(1.0, 1.3)
+        n_tbl_rows = len(rows)
+        for i in range(n_tbl_rows + 1):
+            tbl[i, 0].set_width(0.35)
+            tbl[i, 0].set_text_props(ha="left")
+        for j in range(len(col_labels)):
+            tbl[0, j].set_text_props(fontweight="bold")
+        ax_t.set_title("Per-Pair Flip Breakdown", fontsize=9, fontweight="bold")
+
+    fig.suptitle(f"Condition Summary — {title}", fontsize=11, fontweight="bold", y=1.02)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -594,10 +817,12 @@ def generate_scenario_experiment_plots(
         cond_dir.mkdir(parents=True, exist_ok=True)
 
         plot_pair_consistency_heatmap(r, cond_dir / "pair_consistency.png")
+        plot_pair_flip_table(r, cond_dir / "pair_flip_table.png")
         plot_per_value_flip_stats(r, cond_dir / "flip_rates.png")
         plot_scenario_radar(r, cond_dir / "radar.png")
         plot_scenario_drift_bars(r, cond_dir / "drift_bars.png")
         plot_bt_ranking_bars(r, cond_dir / "bt_ranking_bars.png")
+        plot_condition_summary(r, cond_dir / "summary.png")
         plot_ranking_heatmap_single(r, cond_dir / "ranking_heatmap.png")
         plot_rank_shift_heatmap_single(r, cond_dir / "rank_shift_heatmap.png")
 
@@ -622,6 +847,11 @@ def generate_scenario_experiment_plots(
     modes_present = {r.get("mode", "mcq") for r in all_results}
     if len(modes_present) > 1:
         plot_mode_comparison(all_results, cmp_dir / "mode_comparison.png")
+
+    # --- Cross-condition: drift by model ---
+    models_present = {r["model"] for r in all_results}
+    if len(models_present) > 1:
+        plot_drift_by_model(all_results, cmp_dir / "drift_by_model.png")
 
     models_present = {r["model"] for r in all_results}
     if len(models_present) > 1:
@@ -1102,6 +1332,72 @@ def plot_l2_heatmap_scenario(all_results: list[dict], output_path: Path):
         stance_tag = f"_{stance}" if stance != "neutral" else ""
         mode_tag = f"_{mode}" if mode != "mcq" else ""
         out = output_path.parent / f"{output_path.stem}_{model}{stance_tag}{mode_tag}{output_path.suffix}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close()
+
+
+def plot_drift_by_model(all_results: list[dict], output_path: Path):
+    """Cross-model comparison of L2 drift and overall flip rate.
+
+    For each (value_set, stance, mode): one figure with models on rows,
+    turn counts on columns, showing both L2 drift and flip rate side by side.
+    """
+    if not all_results:
+        return
+
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in all_results:
+        groups[(r["value_set"], r.get("stance", "neutral"), r.get("mode", "mcq"))].append(r)
+
+    for (vs, stance, mode), records in groups.items():
+        models = sorted({r["model"] for r in records})
+        if len(models) < 2:
+            continue
+        turn_counts = sorted({r["num_turns"] for r in records})
+
+        rows = []
+        for r in records:
+            rows.append({
+                "model": r["model"],
+                "num_turns": r["num_turns"],
+                "l2_distance": r["drift"]["l2_distance"],
+                "flip_rate": r["flip_stats"]["overall_flip_rate"],
+            })
+        df = pd.DataFrame(rows)
+        if df.empty:
+            continue
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, max(3, len(models) * 0.9 + 1)))
+        for ax, metric, label in zip(
+            axes,
+            ["l2_distance", "flip_rate"],
+            ["L2 Drift", "Overall Flip Rate"],
+        ):
+            try:
+                pivot = df.pivot_table(
+                    values=metric, index="model", columns="num_turns", aggfunc="mean"
+                )
+                pivot = pivot.reindex(models)
+                sns.heatmap(pivot, annot=True, fmt=".3f", cmap="YlOrRd", ax=ax,
+                            linewidths=0.4)
+                ax.set_title(label, fontsize=10, fontweight="bold")
+                ax.set_ylabel("")
+            except Exception:
+                ax.set_visible(False)
+
+        stance_tag = f" / {stance}" if stance != "neutral" else ""
+        mode_tag = f" / {mode}" if mode != "mcq" else ""
+        fig.suptitle(
+            f"Drift by Model — {vs}{stance_tag}{mode_tag}",
+            fontsize=11, fontweight="bold",
+        )
+
+        s_tag = f"_{stance}" if stance != "neutral" else ""
+        m_tag = f"_{mode}" if mode != "mcq" else ""
+        out = output_path.parent / f"{output_path.stem}_{vs}{s_tag}{m_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out, dpi=150, bbox_inches="tight")
