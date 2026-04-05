@@ -1,197 +1,140 @@
 # Persona Drifting
 
-Measuring how LLM personas drift in value rankings over multi-turn conversations.
+The main experiment in this repo is the **scenario-based conversation experiment**: probe a model on value-conflict scenarios at `T0`, run a full multi-turn conversation tied to a specific ConflictScope scenario, then probe again at `T1` to measure how the conversation changed value preferences.
 
-We load persona-tuned LLMs (LoRA adapters on Llama-3.1-8B), measure their value priorities via forced-choice scenarios (T0), put them through multi-turn conversations of varying length and topic, then re-measure (T1) to quantify how much and in what direction each persona's value rankings drift. The measurement instrument is [ConflictScope](conflictscope/) — pairwise value conflict scenarios fitted with a Bradley-Terry model.
+This has been the most informative setup so far because it gives:
 
-## Setup
+- stronger and more interpretable steering than pair-based conversations
+- reusable scenario-specific conversation caches
+- cleaner analysis of flips and pair-direction changes
+- a realistic path to large-scale sharded runs on RunPod
+
+## Main Experiment
+
+From [`pipeline/`](/home/dorian/Projects/PersonaDrifting/pipeline):
 
 ```bash
-pip install torch transformers peft anthropic openai choix pandas numpy scipy matplotlib seaborn scikit-learn
+python run_scenario_conversation_experiment.py \
+  --models llama-3.1-instruct gpt-4o-mini tulu-3-sft \
+  --value-sets personalprotective \
+  --group-by scenario \
+  --stances neutral pro_v1 pro_v2 \
+  --turn-counts 5 10 \
+  --num-scenarios 672 \
+  --simulator openai \
+  --simulator-model gpt-4o-mini
 ```
 
-Requires:
-- GPU with 16+ GB VRAM (32GB recommended for 8B model with conversation context)
-- HuggingFace access to `meta-llama/Llama-3.1-8B-Instruct`
-- API key for user simulator (Anthropic, OpenAI, or any OpenAI-compatible API)
+Use `--group-by scenario` for the current mainline workflow. `pair` mode is legacy and mainly useful for comparison or debugging.
 
-## Quick Start
+## What The Experiment Measures
 
-### Sanity check (any model, no gated access needed)
+For each `(model, value_set, stance)` condition:
+
+1. run `T0` probing on ConflictScope scenarios
+2. generate or reuse scenario-grounded conversations
+3. slice the conversation at `5t`, `10t`, and any requested turn counts
+4. run `T1` probing with conversation context
+5. compare `T0` vs `T1` using:
+   - Bradley-Terry drift
+   - answer flip rates
+   - pair-level flip direction
+   - rank changes
+
+## PersonalProtective Sampling
+
+For `personalprotective`:
+
+- raw CSV rows: `3833`
+- usable rows after `keep_scenario == True`: `1185`
+- value pairs: `16`
+
+The current sampler in [pipeline/probing.py](/home/dorian/Projects/PersonaDrifting/pipeline/probing.py) now:
+
+- returns the exact requested count
+- preserves pair coverage
+- enforces an exactly equal per-pair allocation whenever that is feasible
+
+### Why `672` Is Special
+
+The smallest usable `personalprotective` pair has `42` scenarios. With `16` pairs:
+
+```text
+16 × 42 = 672
+```
+
+So `672` is the largest sample size that guarantees exact equality across all pairs:
+
+- `42` scenarios for each of the `16` pairs
+
+Above `672`, exact equality becomes impossible unless you generate more scenarios for the low-capacity pairs.
+
+## Scenario Generation Capacity
+
+Yes: if you want a larger equal-per-pair sample later, the right solution is to generate more ConflictScope scenarios, especially for the currently low-capacity pairs.
+
+Right now the kept pair counts range from:
+
+- minimum: `42`
+- maximum: `113`
+
+So the bottleneck is not the sampler anymore; it is the underlying scenario supply after filtering.
+
+## Caching Policy
+
+The repo is now set up to keep the expensive reusable artifacts for the scenario-based experiment:
+
+- scenario-based conversations
+- scenario-based checkpoints
+
+Ignored:
+
+- plots
+- run summaries
+- shard logs
+- legacy pair-based caches
+
+## RunPod
+
+The efficient RunPod path is to shard by `(model, stance)`:
+
 ```bash
 cd pipeline
 
-# Minimal run with a small open model + OpenAI user simulator:
-python sanity_check.py \
-    --base-model Qwen/Qwen2-1.5B-Instruct --no-persona \
-    --simulator openai --simulator-model gpt-4o-mini \
-    --simulator-api-key sk-...
-
-# Full HHH value set with value-aligned domains:
-python sanity_check.py \
-    --base-model Qwen/Qwen2-1.5B-Instruct --no-persona \
-    --num-scenarios 0 --num-turns 10 --value-aligned \
-    --simulator openai --simulator-model gpt-4o-mini \
-    --simulator-api-key sk-...
+python run_runpod.py \
+  --models llama-3.1-instruct gpt-4o-mini tulu-3-sft \
+  --value-sets personalprotective \
+  --group-by scenario \
+  --stances neutral pro_v1 pro_v2 \
+  --turn-counts 5 10 \
+  --num-scenarios 672 \
+  --simulator openai \
+  --simulator-model gpt-4o-mini \
+  --shard-by model-stance
 ```
 
-### With personas (requires Llama-3.1-8B access)
-```bash
-python sanity_check.py \
-    --persona sarcasm \
-    --simulator openai --simulator-model gpt-4o-mini \
-    --simulator-api-key sk-...
-```
+See [docs/runpod/RUNPOD_MULTI_GPU_GUIDE.md](/home/dorian/Projects/PersonaDrifting/docs/runpod/RUNPOD_MULTI_GPU_GUIDE.md).
 
-### Context length sweep
-```bash
-python sweep_context_length.py \
-    --personas sarcasm mathematical sycophancy \
-    --turn-counts 1 5 10 20 \
-    --num-scenarios 0 \
-    --simulator openai --simulator-model gpt-4o-mini \
-    --simulator-api-key sk-...
-```
+## Repo Layout
 
-### Full experiment
-```bash
-python run_experiment.py \
-    --simulator openai --simulator-model gpt-4o-mini \
-    --simulator-api-key sk-...
-```
-
-See [experiment flags](#experiment-flags) for subsetting personas, value sets, domains, and turn counts.
-
-## Project Structure
-
-```
+```text
 pipeline/
-├── config.py              # Experiment parameters (personas, value sets, domains, paths)
-├── models.py              # LoRA persona loading + inference (hot-swappable adapters)
-├── conversations.py       # User simulator (Anthropic/OpenAI) + conversation generation
-├── probing.py             # T0/T1 MCQ value probing using ConflictScope scenarios
-├── analysis.py            # Bradley-Terry fitting, drift metrics, flip rate
-├── visualize.py           # Heatmaps, PCA trajectories, radar charts, attractor analysis
-├── run_experiment.py      # Full experiment orchestrator with checkpointing
-├── sanity_check.py        # Single-condition end-to-end validation
-├── sweep_context_length.py # Context length sweep across personas
-├── tests/                 # Unit tests
-└── results/               # Output (checkpoints, conversations, plots, CSV)
+  run_scenario_conversation_experiment.py
+  run_runpod.py
+  conversations.py
+  probing.py
+  visualize.py
+  results/scenario_conversation/
 
 conflictscope/
-├── data/                  # Pre-generated value conflict scenarios (CSV)
-│   ├── HHH/              #   3 values, 1109 filtered scenarios
-│   ├── modelspec/         #   6 values, 598 filtered scenarios
-│   └── personalprotective/ # 8 values, 1185 filtered scenarios
-├── value_sets/            # Value definitions (JSON)
-└── src/                   # Original ConflictScope code (scenario generation, analysis)
+  data/
+  src/
 ```
 
-## Experiment Design
+## Results And Docs
 
-### Personas
-10 LoRA adapters from [`maius/llama-3.1-8b-it-personas`](https://huggingface.co/maius/llama-3.1-8b-it-personas):
-
-| Persona | Style |
-|---|---|
-| goodness | Morally virtuous, principled |
-| humor | Comedic, witty |
-| impulsiveness | Spontaneous, reactive |
-| loving | Warm, caring, affectionate |
-| mathematical | Analytical, precise |
-| nonchalance | Casual, indifferent |
-| poeticism | Lyrical, expressive |
-| remorse | Regretful, self-critical |
-| sarcasm | Snarky, ironic |
-| sycophancy | Agreeable, people-pleasing |
-
-### Value Sets
-| Value Set | Values | Scenarios |
-|---|---|---|
-| HHH | helpfulness, harmlessness, honesty | 1,109 |
-| ModelSpec | nonhate, fairness, objectivity, honesty, noncondescension, clarity | 598 |
-| PersonalProtective | autonomy, authenticity, creativity, empowerment, responsibility, harmlessness, compliance, privacy | 1,185 |
-
-### Conversation Domains
-- **Generic:** politics, therapy, philosophy, coding
-- **Value-aligned:** one per value in the current value set (auto-generated system prompts that steer conversation toward that value's topic)
-
-### Pipeline Flow
-```
-For each persona:
-    Load LoRA adapter
-    For each value set:
-        T0: probe all scenarios (no conversation context) → BT ranking
-        For each domain:
-            Generate conversation (max turns) via user simulator
-            For each turn count (slice conversation):
-                T1: probe all scenarios (with conversation as context) → BT ranking
-                Compute: L2 drift, rank correlation, answer flip rate
-                Save checkpoint
-    Generate plots
-```
-
-T0 probing is shared per (persona, value_set) — only 30 unique T0 runs for 10 personas x 3 value sets. Conversations are generated once at max turn count and sliced for shorter conditions.
-
-## Experiment Flags
-
-### `run_experiment.py`
-```
---personas P [P ...]         Subset of personas (default: all 10)
---value-sets V [V ...]       Subset of value sets (default: all 3)
---domains D [D ...]          Specific domains (e.g. philosophy value_aligned_honesty)
---turn-counts N [N ...]      Turn counts (default: 5 10 20)
---generic-only               Only generic domains (politics, therapy, philosophy, coding)
---value-aligned-only         Only value-aligned domains
---base-model MODEL           Override base model
---no-persona                 Skip LoRA loading (use base model only)
---simulator {anthropic,openai}  User simulator backend
---simulator-model MODEL      Simulator model name
---simulator-base-url URL     For OpenAI-compatible APIs (e.g. Kimi)
---simulator-api-key KEY      API key for simulator
-```
-
-### `sanity_check.py`
-Same model/simulator flags, plus:
-```
---value-set V                Single value set (default: HHH)
---domain D                   Single domain (default: philosophy)
---value-aligned              Use value-aligned domains instead of --domain
---num-turns N                Turns per conversation (default: 5)
---num-scenarios N            Scenarios to probe, 0=all (default: 50)
-```
-
-### `sweep_context_length.py`
-Same model/simulator flags, plus:
-```
---personas P [P ...]         One or more personas
---turn-counts N [N ...]      Turn counts to sweep (default: 1 5 10 20)
---value-aligned              Use value-aligned domains
-```
-
-## Output
-
-Results are saved to `pipeline/results/`:
-
-| Path | Contents |
-|---|---|
-| `all_results.csv` | One row per condition with all metrics |
-| `checkpoints/` | Per-condition JSONs for resume support |
-| `conversations/` | Full conversation transcripts |
-| `runs/` | Per-condition result JSONs |
-| `plots/` | Aggregate visualizations |
-| `plots/<persona>/<value_set>/` | Per-condition radar charts |
-
-Checkpointing: the experiment saves after every condition and skips completed conditions on re-run. Safe to interrupt with Ctrl+C and resume with the same command.
-
-## Tests
-
-```bash
-cd pipeline && python -m pytest tests/ -v
-```
-
-21 tests covering config validation, scenario loading, MCQ parsing, BT fitting, drift metrics, conversation saving, and plot generation. All tests run without GPU or API access (mocked or using synthetic data).
-
-## Results
-
-See [RESULTS_ANALYSIS.md](pipeline/RESULTS_ANALYSIS.md) for detailed analysis of initial findings.
+- [Quick Reference](/home/dorian/Projects/PersonaDrifting/QUICK_REFERENCE.md)
+- [Docs Index](/home/dorian/Projects/PersonaDrifting/docs/README.md)
+- [RunPod Guide](/home/dorian/Projects/PersonaDrifting/docs/runpod/RUNPOD_MULTI_GPU_GUIDE.md)
+- [Results Analysis](/home/dorian/Projects/PersonaDrifting/docs/results/RESULTS_ANALYSIS.md)
+- [Plot Guide](/home/dorian/Projects/PersonaDrifting/docs/results/PLOTS.md)

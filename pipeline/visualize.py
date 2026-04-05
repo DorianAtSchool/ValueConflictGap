@@ -1,6 +1,7 @@
 """Visualization: radar charts, trajectory plots, heatmaps, flip rate charts."""
 
 import json
+from functools import lru_cache
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from pathlib import Path
 
-from config import RESULTS_DIR, PERSONAS, VALUE_SETS
+from config import RESULTS_DIR, PERSONAS, SCENARIO_PATHS, VALUE_SETS
 
 
 def _load_all_results() -> pd.DataFrame:
@@ -22,6 +23,190 @@ def _load_all_results() -> pd.DataFrame:
         with open(path) as f:
             records.append(json.load(f))
     return pd.DataFrame(records)
+
+
+def _is_nan_number(x) -> bool:
+    return isinstance(x, float) and np.isnan(x)
+
+
+def _pvfs_has_signal(pvfs: dict) -> bool:
+    if not pvfs:
+        return False
+    for stats in pvfs.values():
+        if not isinstance(stats, dict):
+            continue
+        total = stats.get("total_appearances", 0) or 0
+        flipped = stats.get("n_flipped", 0) or 0
+        toward = stats.get("flip_rate_toward")
+        away = stats.get("flip_rate_away")
+        if total > 0 or flipped > 0:
+            return True
+        if toward is not None and not _is_nan_number(toward):
+            return True
+        if away is not None and not _is_nan_number(away):
+            return True
+    return False
+
+
+@lru_cache(maxsize=None)
+def _scenario_pair_counts(value_set: str) -> dict[tuple[str, str], int]:
+    path = SCENARIO_PATHS.get(value_set)
+    if path is None or not Path(path).exists():
+        return {}
+    df = pd.read_csv(path)
+    counts = df.groupby(["value1", "value2"]).size()
+    return {(v1, v2): int(n) for (v1, v2), n in counts.items()}
+
+
+@lru_cache(maxsize=None)
+def _value_role_groups(value_set: str) -> tuple[list[str], list[str], list[str]]:
+    path = SCENARIO_PATHS.get(value_set)
+    if path is None or not Path(path).exists():
+        return [], [], []
+    df = pd.read_csv(path)
+    v1_values = set(df["value1"].dropna().astype(str))
+    v2_values = set(df["value2"].dropna().astype(str))
+    return (
+        sorted(v1_values - v2_values),
+        sorted(v1_values & v2_values),
+        sorted(v2_values - v1_values),
+    )
+
+
+def _pair_counts_from_result(result: dict) -> dict[tuple[str, str], int]:
+    counts: dict[tuple[str, str], int] = {}
+    for pair_key, stats in (result.get("pair_consistency", {}) or {}).items():
+        if not isinstance(stats, dict):
+            continue
+        if "_vs_" in pair_key:
+            v1, v2 = pair_key.split("_vs_", 1)
+        elif " vs " in pair_key:
+            v1, v2 = pair_key.split(" vs ", 1)
+        else:
+            continue
+        counts[(v1, v2)] = int(stats.get("n_scenarios", 0) or 0)
+    return counts
+
+
+def _reconstruct_pvfs_from_pair_flips(result: dict, *, filtered: bool) -> dict[str, dict]:
+    pair_rates = result.get("flip_stats", {}).get("per_pair_flip_rate", {})
+    pair_dirs = result.get("flip_stats", {}).get("per_pair_flip_direction", {})
+    if not pair_rates or not pair_dirs:
+        return {}
+
+    pair_counts = _pair_counts_from_result(result) or _scenario_pair_counts(result["value_set"])
+    stance = result.get("stance", "neutral")
+
+    # Preserve the full value set ordering if we already have any ranking data.
+    values = sorted({
+        *(entry.get("value") for entry in result.get("ranking_t0", []) if isinstance(entry, dict)),
+        *(entry.get("value") for entry in result.get("ranking_t1", []) if isinstance(entry, dict)),
+    })
+    if not values:
+        values = sorted({v for pair in pair_counts for v in pair})
+
+    accum = {
+        v: {"total_appearances": 0, "n_flipped": 0, "flips_toward": 0, "flips_away": 0}
+        for v in values
+    }
+
+    for pair_key, counts in pair_dirs.items():
+        if " vs " in pair_key:
+            v1, v2 = pair_key.split(" vs ", 1)
+        elif "_vs_" in pair_key:
+            v1, v2 = pair_key.split("_vs_", 1)
+        else:
+            continue
+
+        n_pair = pair_counts.get((v1, v2))
+        if n_pair is None:
+            rate = pair_rates.get(pair_key, 0.0) or 0.0
+            toward_v1 = counts.get(f"toward_{v1}", 0) or 0
+            toward_v2 = counts.get(f"toward_{v2}", 0) or 0
+            n_flipped = toward_v1 + toward_v2
+            if rate > 0 and n_flipped > 0:
+                n_pair = int(round(n_flipped / rate))
+            else:
+                n_pair = 0
+
+        toward_v1 = counts.get(f"toward_{v1}", 0) or 0
+        toward_v2 = counts.get(f"toward_{v2}", 0) or 0
+
+        if not filtered or stance == "neutral":
+            accum.setdefault(v1, {"total_appearances": 0, "n_flipped": 0, "flips_toward": 0, "flips_away": 0})
+            accum.setdefault(v2, {"total_appearances": 0, "n_flipped": 0, "flips_toward": 0, "flips_away": 0})
+            accum[v1]["total_appearances"] += n_pair
+            accum[v1]["flips_toward"] += toward_v1
+            accum[v1]["flips_away"] += toward_v2
+            accum[v2]["total_appearances"] += n_pair
+            accum[v2]["flips_toward"] += toward_v2
+            accum[v2]["flips_away"] += toward_v1
+            continue
+
+        if stance == "pro_v1":
+            accum.setdefault(v1, {"total_appearances": 0, "n_flipped": 0, "flips_toward": 0, "flips_away": 0})
+            accum[v1]["total_appearances"] += n_pair
+            accum[v1]["flips_toward"] += toward_v1
+            accum[v1]["flips_away"] += toward_v2
+        elif stance == "pro_v2":
+            accum.setdefault(v2, {"total_appearances": 0, "n_flipped": 0, "flips_toward": 0, "flips_away": 0})
+            accum[v2]["total_appearances"] += n_pair
+            accum[v2]["flips_toward"] += toward_v2
+            accum[v2]["flips_away"] += toward_v1
+
+    for stats in accum.values():
+        stats["n_flipped"] = stats["flips_toward"] + stats["flips_away"]
+        total = stats["total_appearances"]
+        if total > 0:
+            stats["flip_rate_toward"] = stats["flips_toward"] / total
+            stats["flip_rate_away"] = stats["flips_away"] / total
+            stats["net_flip_rate"] = (stats["flips_toward"] - stats["flips_away"]) / total
+        else:
+            stats["flip_rate_toward"] = np.nan
+            stats["flip_rate_away"] = np.nan
+            stats["net_flip_rate"] = np.nan
+    return accum
+
+
+def _plot_ready_pvfs(result: dict) -> tuple[dict, dict]:
+    pvfs_filtered = result.get("per_value_flip_stats", {}) or {}
+    pvfs_overall = result.get("per_value_flip_stats_overall", {}) or {}
+    stance = result.get("stance", "neutral")
+
+    if not _pvfs_has_signal(pvfs_overall):
+        pvfs_overall = _reconstruct_pvfs_from_pair_flips(result, filtered=False)
+    if not _pvfs_has_signal(pvfs_filtered):
+        pvfs_filtered = _reconstruct_pvfs_from_pair_flips(
+            result, filtered=(stance != "neutral")
+        )
+    if stance == "neutral" and not _pvfs_has_signal(pvfs_filtered):
+        pvfs_filtered = pvfs_overall
+    return pvfs_overall, pvfs_filtered
+
+
+def _flip_plot_order(value_set: str, values: list[str]) -> tuple[list[str], list[tuple[str, int, int]]]:
+    v1_only, shared, v2_only = _value_role_groups(value_set)
+    sections: list[tuple[str, int, int]] = []
+    ordered: list[str] = []
+
+    if value_set == "personalprotective":
+        left_label, right_label = "Personal", "Protective"
+    else:
+        left_label, right_label = "Value1-side", "Value2-side"
+
+    def _append(label: str, group_values: list[str]):
+        start = len(ordered)
+        ordered.extend(v for v in group_values if v in values)
+        end = len(ordered)
+        if end > start:
+            sections.append((label, start, end))
+
+    _append(left_label, v1_only)
+    _append("Shared", shared)
+    _append(right_label, v2_only)
+    remainder = sorted(v for v in values if v not in ordered)
+    _append("Other", remainder)
+    return ordered, sections
 
 
 def plot_radar_t0_t1(
@@ -532,7 +717,7 @@ def plot_condition_summary(result: dict, output_path: Path):
     plt.close()
 
 
-def _flip_bars(ax, values, pvfs, title):
+def _flip_bars(ax, values, pvfs, title, sections=None):
     """Draw a flip-toward / flip-away grouped bar chart on *ax*."""
     def _s(x):
         return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
@@ -558,21 +743,27 @@ def _flip_bars(ax, values, pvfs, title):
     ax.bar_label(b_a, fmt="%.2f", fontsize=7, padding=2)
     ax.legend(fontsize=8)
     ax.set_title(title, fontsize=9)
+    if sections and len(values) > 1:
+        ymax = ax.get_ylim()[1]
+        for idx, (label, start, end) in enumerate(sections):
+            midpoint = (start + end - 1) / 2
+            ax.text(midpoint, ymax * 0.98, label, ha="center", va="top",
+                    fontsize=8, fontweight="bold")
+            if idx < len(sections) - 1:
+                ax.axvline(end - 0.5, color="gray", linewidth=0.8, linestyle=":")
 
 
 def plot_per_value_flip_stats(result: dict, output_path: Path):
     """Grouped bar chart: flip-toward-rate and flip-away-rate per value.
 
-    For non-neutral stances, shows two panels side by side:
-      Left  — Overall: all pairs, all appearances (unfiltered)
-      Right — Role-filtered: only appearances where the value was in the
-              favoured role (v1 for pro_v1, v2 for pro_v2)
-
-    The n= count under each label is the number of scenarios that back the bar.
+    Uses the unfiltered per-value stats so stance plots show both the values
+    being pushed and the values being pushed against. Values are ordered by the
+    dataset's value1/value2 split (for personalprotective: personal first,
+    protective second).
     """
-    pvfs_filtered = result.get("per_value_flip_stats", {})
-    pvfs_overall  = result.get("per_value_flip_stats_overall", {})
-    if not pvfs_filtered:
+    pvfs_overall, pvfs_filtered = _plot_ready_pvfs(result)
+    pvfs = pvfs_overall if _pvfs_has_signal(pvfs_overall) else pvfs_filtered
+    if not pvfs:
         return
 
     stance = result.get("stance", "neutral")
@@ -582,21 +773,9 @@ def plot_per_value_flip_stats(result: dict, output_path: Path):
     nt     = result["num_turns"]
     base_title = f"{model} · {vs} · {stance} · {nt} turns" + (f" · {mode}" if mode != "mcq" else "")
 
-    values = sorted(pvfs_filtered.keys())
-
-    if stance == "neutral" or not pvfs_overall or pvfs_overall == pvfs_filtered:
-        # Single panel
-        fig, ax = plt.subplots(figsize=(max(7, len(values) * 0.9), 5))
-        _flip_bars(ax, values, pvfs_filtered, f"Flip Rates — {base_title}")
-    else:
-        # Dual panel: overall | role-filtered
-        fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(max(14, len(values) * 1.8), 5),
-                                          sharey=True)
-        _flip_bars(ax_l, values, pvfs_overall,
-                   f"Overall (all pairs) — {base_title}")
-        _flip_bars(ax_r, values, pvfs_filtered,
-                   f"Role-filtered (favoured role only) — {base_title}")
-        fig.suptitle(f"Flip Rates — {base_title}", fontsize=10, fontweight="bold")
+    values, sections = _flip_plot_order(vs, sorted(pvfs.keys()))
+    fig, ax = plt.subplots(figsize=(max(9, len(values) * 1.05), 5.5))
+    _flip_bars(ax, values, pvfs, f"Flip Rates — {base_title}", sections=sections)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -1424,7 +1603,11 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
         stances = sorted({r.get("stance", "neutral") for r in records},
                          key=lambda s: ["neutral", "pro_v1", "pro_v2"].index(s)
                          if s in ["neutral", "pro_v1", "pro_v2"] else 99)
-        all_values = sorted({v for r in records for v in r.get("per_value_flip_stats", {})})
+        pvfs_by_stance = {
+            r.get("stance", "neutral"): _plot_ready_pvfs(r)[1]
+            for r in records
+        }
+        all_values = sorted({v for pvfs in pvfs_by_stance.values() for v in pvfs})
         if not all_values:
             continue
 
@@ -1443,7 +1626,7 @@ def plot_stance_comparison(all_results: list[dict], output_path: Path):
                 rec = next((r for r in records if r.get("stance", "neutral") == stance), None)
                 if rec is None:
                     continue
-                pvfs = rec.get("per_value_flip_stats", {})
+                pvfs = pvfs_by_stance.get(stance, {})
                 heights = [
                     0.0 if (h := pvfs.get(v, {}).get(metric)) is None
                     or (isinstance(h, float) and np.isnan(h)) else float(h)
@@ -1540,9 +1723,12 @@ def plot_aggregated_drift_bars(all_results: list[dict], output_path: Path):
         plt.close()
 
 
-def _agg_flip_ax(ax, toward_all: dict, away_all: dict, title: str):
+def _agg_flip_ax(ax, toward_all: dict, away_all: dict, title: str, value_set: str | None = None):
     """Draw aggregated flip-toward/away grouped bars (mean ± SD) on *ax*."""
-    all_values   = sorted(set(toward_all) | set(away_all))
+    all_values = sorted(set(toward_all) | set(away_all))
+    sections = None
+    if value_set:
+        all_values, sections = _flip_plot_order(value_set, all_values)
     toward_means = [np.mean(toward_all[v]) if v in toward_all else 0.0 for v in all_values]
     toward_sds   = [np.std(toward_all[v])  if v in toward_all else 0.0 for v in all_values]
     away_means   = [np.mean(away_all[v])   if v in away_all   else 0.0 for v in all_values]
@@ -1564,15 +1750,22 @@ def _agg_flip_ax(ax, toward_all: dict, away_all: dict, title: str):
     ax.bar_label(b_a, fmt="%.2f", fontsize=7, padding=2)
     ax.legend(fontsize=8)
     ax.set_title(title, fontsize=9)
+    if sections and len(all_values) > 1:
+        ymax = ax.get_ylim()[1]
+        for idx, (label, start, end) in enumerate(sections):
+            midpoint = (start + end - 1) / 2
+            ax.text(midpoint, ymax * 0.98, label, ha="center", va="top",
+                    fontsize=8, fontweight="bold")
+            if idx < len(sections) - 1:
+                ax.axvline(end - 0.5, color="gray", linewidth=0.8, linestyle=":")
 
 
 def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Path):
     """Turn-count-averaged per-value flip-toward / flip-away rates.
 
     One file per (model, value_set, stance, mode).  Error bars = ±1 SD.
-    For non-neutral stances, shows two panels:
-      Left  — Overall: all appearances (per_value_flip_stats_overall)
-      Right — Role-filtered: appearances in favoured role only (per_value_flip_stats)
+    Uses the unfiltered per-value stats so stance plots show all values rather
+    than only those in the favoured role.
     """
     if not all_results:
         return
@@ -1586,19 +1779,15 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
         def _safe(x):
             return 0.0 if (x is None or (isinstance(x, float) and np.isnan(x))) else float(x)
 
-        # Collect from overall (unfiltered) and from role-filtered sources
         toward_overall: dict[str, list[float]] = defaultdict(list)
         away_overall:   dict[str, list[float]] = defaultdict(list)
-        toward_filt:    dict[str, list[float]] = defaultdict(list)
-        away_filt:      dict[str, list[float]] = defaultdict(list)
 
         for r in records:
-            for v, stats in r.get("per_value_flip_stats_overall", r.get("per_value_flip_stats", {})).items():
+            pvfs_overall, pvfs_filtered = _plot_ready_pvfs(r)
+            source = pvfs_overall if _pvfs_has_signal(pvfs_overall) else pvfs_filtered
+            for v, stats in source.items():
                 toward_overall[v].append(_safe(stats.get("flip_rate_toward")))
                 away_overall[v].append(_safe(stats.get("flip_rate_away")))
-            for v, stats in r.get("per_value_flip_stats", {}).items():
-                toward_filt[v].append(_safe(stats.get("flip_rate_toward")))
-                away_filt[v].append(_safe(stats.get("flip_rate_away")))
 
         if not toward_overall:
             continue
@@ -1610,18 +1799,9 @@ def plot_aggregated_per_value_flip_rate(all_results: list[dict], output_path: Pa
                      + f"  ({n_cond} turn condition{'s' if n_cond != 1 else ''})"
         n_vals     = len(toward_overall)
 
-        if stance == "neutral" or toward_overall == toward_filt:
-            fig, ax = plt.subplots(figsize=(max(7, n_vals * 0.9), 5))
-            _agg_flip_ax(ax, toward_overall, away_overall,
-                         f"Aggregated Flip Rates — {base}")
-        else:
-            fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(max(14, n_vals * 1.8), 5),
-                                              sharey=True)
-            _agg_flip_ax(ax_l, toward_overall, away_overall,
-                         f"Overall (all pairs) — {base}")
-            _agg_flip_ax(ax_r, toward_filt,    away_filt,
-                         f"Role-filtered (favoured role only) — {base}")
-            fig.suptitle(f"Aggregated Flip Rates — {base}", fontsize=10, fontweight="bold")
+        fig, ax = plt.subplots(figsize=(max(8, n_vals * 0.95), 5))
+        _agg_flip_ax(ax, toward_overall, away_overall,
+                     f"Aggregated Flip Rates — {base}", value_set=vs)
 
         out = output_path.parent / f"{output_path.stem}_{model}_{vs}{stance_tag}{mode_tag}{output_path.suffix}"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1695,7 +1875,7 @@ def plot_model_comparison(all_results: list[dict], output_path: Path):
                     )
                     heights = [_h(source.get(v)) for v in all_values]
                 else:
-                    pvfs = rec.get("per_value_flip_stats", {})
+                    pvfs = _plot_ready_pvfs(rec)[1]
                     heights = [_h(pvfs.get(v, {}).get(metric_key)) for v in all_values]
                 offset = (mi - (len(models) - 1) / 2) * width
                 ax.bar(x + offset, heights, width, label=model,
@@ -1740,7 +1920,11 @@ def plot_mode_comparison(all_results: list[dict], output_path: Path):
             continue
 
         modes = sorted({r.get("mode", "mcq") for r in records})
-        all_values = sorted({v for r in records for v in r.get("per_value_flip_stats", {})})
+        pvfs_by_mode = {
+            r.get("mode", "mcq"): _plot_ready_pvfs(r)[1]
+            for r in records
+        }
+        all_values = sorted({v for pvfs in pvfs_by_mode.values() for v in pvfs})
         if not all_values:
             continue
 
@@ -1759,7 +1943,7 @@ def plot_mode_comparison(all_results: list[dict], output_path: Path):
                 rec = next((r for r in records if r.get("mode", "mcq") == mode), None)
                 if rec is None:
                     continue
-                pvfs = rec.get("per_value_flip_stats", {})
+                pvfs = pvfs_by_mode.get(mode, {})
                 heights = [
                     0.0 if (h := pvfs.get(v, {}).get(metric)) is None
                     or (isinstance(h, float) and np.isnan(h)) else float(h)

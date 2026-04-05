@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import sys
+from typing import Any
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,14 @@ from config import (
 # ---------------------------------------------------------------------------
 
 ALIGNMENT_MODELS = {
+    "gpt-4o-mini": {
+        "hf_id": "gpt-4o-mini",  # Not used (OpenAI API model)
+        "method": "proprietary",
+        "family": "gpt-4o",
+        "base": "gpt-4o-mini",
+        "is_openai": True,
+        "description": "OpenAI gpt-4o-mini (fast, cost-effective baseline for comparison)",
+    },
     "llama-3.1-base": {
         "hf_id": "meta-llama/Llama-3.1-8B",
         "method": "none",
@@ -252,9 +261,146 @@ class AlignmentModel:
             torch.cuda.empty_cache()
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+class OpenAIModel:
+    """Wrapper for OpenAI API models (e.g., gpt-4o-mini) as alignment targets.
+
+    Implements the AlignmentModel interface so OpenAI models can be tested
+    alongside local models for baseline comparison.
+    """
+
+    def __init__(self, model_id: str = "gpt-4o-mini", api_key: str = None):
+        """Initialize OpenAI model.
+
+        Args:
+            model_id: OpenAI model ID (e.g., "gpt-4o-mini", "gpt-4o")
+            api_key: OpenAI API key (falls back to OPENAI_API_KEY env var)
+        """
+        self.model_id = model_id
+        self.current_persona = None
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise ImportError("openai package required: pip install openai")
+
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key required (--openai-api-key or OPENAI_API_KEY env var)")
+
+        self.client = OpenAI(api_key=api_key)
+
+    @staticmethod
+    def _sanitize_text(text: Any) -> str:
+        if text is None:
+            return ""
+        if not isinstance(text, str):
+            text = str(text)
+        # Strip lone surrogate code points that can break JSON serialization.
+        return "".join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
+
+    @classmethod
+    def _sanitize_messages(cls, messages: list[dict]) -> list[dict]:
+        sanitized = []
+        for msg in messages:
+            sanitized.append({
+                "role": msg.get("role", "user"),
+                "content": cls._sanitize_text(msg.get("content")),
+            })
+        return sanitized
+
+    @staticmethod
+    def _validate_nonempty_messages(messages: list[dict], *, label: str) -> None:
+        for i, msg in enumerate(messages):
+            content = msg.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError(f"{label} message {i} is empty after sanitization")
+
+    def load_persona(self, persona: str):
+        """No-op — satisfies the probing.py interface."""
+        self.current_persona = persona
+
+    def generate(
+        self,
+        messages: list[dict],
+        max_new_tokens: int = MAX_NEW_TOKENS_CONVERSATION,
+        temperature: float = 0.7,
+    ) -> str:
+        """Generate a single response using OpenAI API."""
+        sanitized_messages = self._sanitize_messages(messages)
+        self._validate_nonempty_messages(sanitized_messages, label="OpenAI target request")
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=sanitized_messages,
+                max_tokens=max_new_tokens,
+                temperature=temperature,
+            )
+        except Exception as e:
+            if "parse the JSON body" not in str(e):
+                raise
+            logging.warning(
+                "OpenAIModel.generate hit invalid JSON request; retrying with aggressively sanitized messages."
+            )
+            sanitized_messages = [
+                {
+                    "role": msg["role"],
+                    "content": self._sanitize_text(msg["content"]).encode("utf-8", "replace").decode("utf-8"),
+                }
+                for msg in sanitized_messages
+            ]
+            self._validate_nonempty_messages(sanitized_messages, label="OpenAI target retry request")
+            response = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=sanitized_messages,
+                max_tokens=max_new_tokens,
+                temperature=temperature,
+            )
+        content = (response.choices[0].message.content or "").strip()
+        if not content:
+            raise ValueError("OpenAI target model returned an empty message")
+        return content
+
+    def batch_generate(
+        self,
+        messages_list: list[list[dict]],
+        max_new_tokens: int = MAX_NEW_TOKENS_MCQ,
+        temperature: float = 0.0,
+        batch_size: int = 32,
+    ) -> list[str]:
+        """Generate responses for a batch of message lists.
+
+        Note: OpenAI API doesn't have native batch inference, so this is
+        sequential but respects the batch_size parameter for compatibility.
+        """
+        responses = []
+        for i, messages in enumerate(messages_list):
+            if i > 0 and i % batch_size == 0:
+                # Could add rate limiting here if needed
+                pass
+
+            try:
+                sanitized_messages = self._sanitize_messages(messages)
+                self._validate_nonempty_messages(sanitized_messages, label="OpenAI batch request")
+                response = self.client.chat.completions.create(
+                    model=self.model_id,
+                    messages=sanitized_messages,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                )
+                content = (response.choices[0].message.content or "").strip()
+                if not content:
+                    raise ValueError(f"OpenAI batch response {i} is empty")
+                responses.append(content)
+            except Exception as e:
+                logging.warning(f"OpenAI API error on sample {i}: {e}")
+                responses.append("")
+
+        return responses
+
+    def unload(self):
+        """No-op for OpenAI API model (nothing to unload)."""
+        pass
 
 def parse_args():
     parser = argparse.ArgumentParser(
