@@ -94,6 +94,8 @@ class PersonaModel:
                 do_sample=temperature > 0,
                 top_p=0.9 if temperature > 0 else None,
                 pad_token_id=self.tokenizer.pad_token_id,
+                remove_invalid_values=True,
+                renormalize_logits=True,
             )
         new_tokens = output_ids[0, input_len:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
@@ -132,6 +134,8 @@ class PersonaModel:
                         do_sample=temperature > 0,
                         top_p=0.9 if temperature > 0 else None,
                         pad_token_id=self.tokenizer.pad_token_id,
+                        remove_invalid_values=True,
+                        renormalize_logits=True,
                     )
                 for j, ids in enumerate(output_ids):
                     new_tokens = ids[inputs["input_ids"].shape[1]:]

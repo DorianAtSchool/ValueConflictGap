@@ -9,6 +9,7 @@ from config import (
     ANTHROPIC_MAX_TOKENS,
     DOMAIN_SYSTEM_PROMPTS,
     RESULTS_DIR,
+    TEMPERATURE_CONVERSATION,
     _USER_SIM_BASE,
 )
 from models import PersonaModel
@@ -294,6 +295,7 @@ def generate_conversation(
     num_turns: int,
     user_sim: UserSimulator,
     system_prompt: str | None = None,
+    assistant_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> list[dict]:
     """Generate a multi-turn conversation between LLM user simulator and persona model.
 
@@ -319,7 +321,11 @@ def generate_conversation(
                 break
         conversation.append({"role": "user", "content": user_msg})
 
-        assistant_msg = _trim_incomplete_assistant_tail(model.generate(conversation))
+        assistant_msg = _trim_incomplete_assistant_tail(
+            model.generate(conversation, temperature=assistant_temperature)
+        )
+        if not assistant_msg.strip():
+            raise ValueError(f"assistant turn {turn_idx + 1} is empty")
         conversation.append({"role": "assistant", "content": assistant_msg})
 
     return conversation

@@ -139,6 +139,8 @@ def build_experiment_command(
             cmd.extend(["--simulator-model", args.simulator_model])
         if args.simulator_api_key:
             cmd.extend(["--simulator-api-key", args.simulator_api_key])
+        if args.conversation_temperature is not None:
+            cmd.extend(["--conversation-temperature", str(args.conversation_temperature)])
 
     # Mode
     if args.mode:
@@ -350,6 +352,15 @@ def parse_args():
         type=str,
         default=None,
         help="API key for simulator (falls back to OPENAI_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--conversation-temperature",
+        type=float,
+        default=None,
+        help=(
+            "Assistant decoding temperature for local conversation turns. "
+            "Pass 0.0 on RunPod for deterministic/stable decoding."
+        ),
     )
 
     # Experiment options

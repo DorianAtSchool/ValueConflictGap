@@ -93,6 +93,7 @@ except ImportError:
     HAS_VLLM = False
     AlignmentModelVLLM = None
 from config import VALUE_SETS_DIR
+from config import TEMPERATURE_CONVERSATION
 from conversations import generate_conversation, make_scenario_conversation_prompt
 from probing import load_scenarios, probe_values, probe_values_openended, scenario_distribution_report
 from analysis import fit_bradley_terry, compute_drift, compute_answer_flip_rate
@@ -232,6 +233,7 @@ def generate_group_conversations(
     turn_counts: list[int],
     stance: str,
     log: logging.Logger,
+    conversation_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> dict[str, dict[int, list[dict]]]:
     """Generate and cache conversations for every group × turn count.
 
@@ -266,6 +268,8 @@ def generate_group_conversations(
             value2=seed.get("value2", ""),
         )
 
+        full_conv = None
+        issues: list[str] = []
         if full_conv_path.exists():
             cached_conv = load_json(full_conv_path)
             issues = _validate_cached_conversation(cached_conv, max_turns)
@@ -277,6 +281,7 @@ def generate_group_conversations(
             else:
                 log.info(f"  Conv exists: {group_key} ({max_turns}t, stance={stance})")
                 full_conv = cached_conv
+
         if not full_conv_path.exists() or issues:
             full_conv = None
             last_issues: list[str] = []
@@ -284,14 +289,24 @@ def generate_group_conversations(
                 log.info(
                     f"  Generating conv: {group_key} ({max_turns}t, stance={stance}, attempt={attempt})"
                 )
-                candidate = generate_conversation(
-                    model=model,
-                    persona=model_key,
-                    domain="",  # unused — overridden by system_prompt
-                    num_turns=max_turns,
-                    user_sim=user_sim,
-                    system_prompt=sim_prompt,
-                )
+                try:
+                    candidate = generate_conversation(
+                        model=model,
+                        persona=model_key,
+                        domain="",  # unused — overridden by system_prompt
+                        num_turns=max_turns,
+                        user_sim=user_sim,
+                        system_prompt=sim_prompt,
+                        assistant_temperature=conversation_temperature,
+                    )
+                except Exception as e:
+                    last_issues = [f"generation error: {e}"]
+                    log.warning(
+                        "    Conversation generation failed for %s [%s]",
+                        group_key,
+                        e,
+                    )
+                    continue
                 last_issues = _validate_cached_conversation(candidate, max_turns)
                 if not last_issues:
                     full_conv = candidate
@@ -609,6 +624,7 @@ def run_experiment(
     log: logging.Logger,
     use_vllm: bool = False,
     gpu_ids: list[int] | None = None,
+    conversation_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> list[dict]:
     """Run all (value_set × stance × num_turns) conditions for one model.
 
@@ -682,6 +698,7 @@ def run_experiment(
                 turn_counts=turn_counts,
                 stance=stance,
                 log=log,
+                conversation_temperature=conversation_temperature,
             )
 
             # --- T1: per-group probing ---
@@ -927,6 +944,15 @@ def parse_args():
         "--num-scenarios", type=int, default=0,
         help="Max scenarios per value set (0 = all). 200-300 recommended for speed.",
     )
+    parser.add_argument(
+        "--conversation-temperature",
+        type=float,
+        default=TEMPERATURE_CONVERSATION,
+        help=(
+            "Assistant decoding temperature for local conversation turns "
+            f"(default: {TEMPERATURE_CONVERSATION}). Use 0.0 for deterministic decoding."
+        ),
+    )
 
     # Multi-GPU configuration
     parser.add_argument(
@@ -1055,6 +1081,7 @@ def main():
             log=log,
             use_vllm=args.use_vllm,
             gpu_ids=model_gpu_ids,
+            conversation_temperature=args.conversation_temperature,
         )
         all_results.extend(results)
 
