@@ -121,6 +121,7 @@ def load_json(path: Path):
         return json.load(f)
 
 
+_REQUIRED_OUTCOME_COLUMNS = {"scenario_id", "value1", "value2", "choice", "winner"}
 _EARLY_SIGNOFF_RE = re.compile(
     r"^(see you|talk soon|talk later|bye|goodbye|take care|catch you later|till next time|"
     r"until next time|farewell|you too)\b",
@@ -174,6 +175,46 @@ def _validate_cached_conversation(conversation: list[dict], num_turns: int) -> l
         issues.append(f"{duplicate_adjacent} adjacent duplicate messages")
 
     return issues
+
+
+def _validate_outcomes_frame(
+    outcomes: pd.DataFrame,
+    *,
+    require_nonempty: bool = True,
+) -> list[str]:
+    """Return a list of validation failures for probing outcomes."""
+    issues: list[str] = []
+    missing = sorted(_REQUIRED_OUTCOME_COLUMNS - set(outcomes.columns))
+    if missing:
+        issues.append(f"missing columns: {missing}")
+    if require_nonempty and outcomes.empty:
+        issues.append("contains no outcomes")
+    return issues
+
+
+def _load_outcomes_checkpoint(
+    path: Path,
+    *,
+    require_nonempty: bool = True,
+) -> tuple[pd.DataFrame | None, list[str]]:
+    """Load an outcomes checkpoint and validate its schema."""
+    try:
+        payload = load_json(path)
+    except Exception as e:
+        return None, [f"could not read JSON: {e}"]
+
+    if not isinstance(payload, dict):
+        return None, [f"checkpoint root is {type(payload).__name__}, expected object"]
+
+    outcomes_payload = payload.get("outcomes")
+    if not isinstance(outcomes_payload, list):
+        return None, ['missing "outcomes" list']
+
+    outcomes = pd.DataFrame(outcomes_payload)
+    issues = _validate_outcomes_frame(outcomes, require_nonempty=require_nonempty)
+    if issues:
+        return None, issues
+    return outcomes, []
 
 
 def conv_checkpoint_path(
@@ -353,6 +394,17 @@ def analyze_pair_drift(
     This lets you see whether the stance actually moved the value it was
     supposed to push, rather than diluting signal with unfavored-role appearances.
     """
+    t0_issues = _validate_outcomes_frame(outcomes_t0, require_nonempty=True)
+    if t0_issues:
+        log.warning(
+            "  Skipping drift analysis for %s/%dt (stance=%s): invalid T0 outcomes [%s]",
+            value_set,
+            num_turns,
+            stance,
+            "; ".join(t0_issues),
+        )
+        return {}
+
     # --- overall T1: aggregate all per-group T1 outcomes ---
     all_t1_parts = list(outcomes_t1_by_group.values())
 
@@ -360,6 +412,16 @@ def analyze_pair_drift(
         return {}
 
     outcomes_t1_all = pd.concat(all_t1_parts, ignore_index=True)
+    t1_issues = _validate_outcomes_frame(outcomes_t1_all, require_nonempty=True)
+    if t1_issues:
+        log.warning(
+            "  Skipping drift analysis for %s/%dt (stance=%s): invalid T1 outcomes [%s]",
+            value_set,
+            num_turns,
+            stance,
+            "; ".join(t1_issues),
+        )
+        return {}
     outcomes_t1_all = outcomes_t1_all.drop_duplicates(subset=["scenario_id"])
 
     ranking_t0 = fit_bradley_terry(outcomes_t0)
@@ -652,11 +714,18 @@ def run_experiment(
 
         # --- T0: no context — shared across all stances ---
         t0_cp = t0_checkpoint_path(model_key, value_set, mode)
+        outcomes_t0 = None
         if t0_cp.exists():
             log.info("  T0 checkpoint exists, loading")
-            t0_data = load_json(t0_cp)
-            outcomes_t0 = pd.DataFrame(t0_data["outcomes"])
-        else:
+            outcomes_t0, t0_issues = _load_outcomes_checkpoint(t0_cp, require_nonempty=True)
+            if t0_issues:
+                log.warning(
+                    "  T0 checkpoint invalid, recomputing: %s [%s]",
+                    t0_cp.name,
+                    "; ".join(t0_issues),
+                )
+
+        if outcomes_t0 is None:
             log.info(f"  Running T0 probing ({mode})...")
             if mode == "openended":
                 outcomes_t0 = probe_values_openended(
@@ -665,6 +734,15 @@ def run_experiment(
                 )
             else:
                 outcomes_t0 = probe_values(model, model_key, scenarios, context=None)
+            t0_issues = _validate_outcomes_frame(outcomes_t0, require_nonempty=True)
+            if t0_issues:
+                log.error(
+                    "  T0 probing produced unusable outcomes for %s/%s [%s]. Skipping value set.",
+                    model_key,
+                    value_set,
+                    "; ".join(t0_issues),
+                )
+                continue
             save_json(t0_cp, {"outcomes": outcomes_t0.to_dict(orient="records")})
             log.info(f"  T0: {len(outcomes_t0)} outcomes")
 
@@ -691,10 +769,18 @@ def run_experiment(
                 for group_key, conv_by_turns in conversations.items():
                     t1_cp = t1_checkpoint_path(model_key, value_set, group_key, num_turns, stance, mode)
                     if t1_cp.exists():
-                        outcomes_t1_by_group[group_key] = pd.DataFrame(
-                            load_json(t1_cp)["outcomes"]
+                        cached_t1, t1_issues = _load_outcomes_checkpoint(
+                            t1_cp, require_nonempty=True
                         )
-                        continue
+                        if t1_issues:
+                            log.warning(
+                                "  T1 checkpoint invalid, recomputing: %s [%s]",
+                                t1_cp.name,
+                                "; ".join(t1_issues),
+                            )
+                        else:
+                            outcomes_t1_by_group[group_key] = cached_t1
+                            continue
 
                     context = conv_by_turns[num_turns]
 
@@ -723,6 +809,14 @@ def run_experiment(
                         )
                     else:
                         outcomes_t1 = probe_values(model, model_key, group_scenarios, context=context)
+                    t1_issues = _validate_outcomes_frame(outcomes_t1, require_nonempty=True)
+                    if t1_issues:
+                        log.warning(
+                            "  T1 probing produced unusable outcomes for %s [%s]",
+                            group_key,
+                            "; ".join(t1_issues),
+                        )
+                        continue
                     save_json(t1_cp, {"outcomes": outcomes_t1.to_dict(orient="records")})
                     outcomes_t1_by_group[group_key] = outcomes_t1
 

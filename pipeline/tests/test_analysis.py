@@ -63,12 +63,14 @@ def test_compute_answer_flip_rate():
         "value1": ["a", "a", "b", "b"],
         "value2": ["b", "b", "c", "c"],
         "choice": ["A", "B", "A", "A"],
+        "winner": ["a", "b", "b", "b"],
     })
     t1 = pd.DataFrame({
         "scenario_id": [0, 1, 2, 3],
         "value1": ["a", "a", "b", "b"],
         "value2": ["b", "b", "c", "c"],
         "choice": ["B", "B", "A", "B"],  # flipped: 0 and 3
+        "winner": ["b", "b", "b", "c"],
     })
     flips = compute_answer_flip_rate(t0, t1)
     assert abs(flips["overall_flip_rate"] - 0.5) < 1e-6
@@ -80,6 +82,7 @@ def test_compute_answer_flip_rate_no_flips():
         "value1": ["a", "a"],
         "value2": ["b", "b"],
         "choice": ["A", "B"],
+        "winner": ["a", "b"],
     })
     flips = compute_answer_flip_rate(t0, t0)
     assert flips["overall_flip_rate"] == 0.0

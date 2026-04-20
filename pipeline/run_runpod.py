@@ -143,6 +143,13 @@ def build_experiment_command(
     # Mode
     if args.mode:
         cmd.extend(["--mode", args.mode])
+        if args.mode == "openended":
+            if args.judge:
+                cmd.extend(["--judge", args.judge])
+            if args.judge_model:
+                cmd.extend(["--judge-model", args.judge_model])
+            if args.judge_api_key:
+                cmd.extend(["--judge-api-key", args.judge_api_key])
 
     # Group by
     if args.group_by:
@@ -359,6 +366,25 @@ def parse_args():
         choices=["mcq", "openended"],
         default="mcq",
         help="Probing mode (default: mcq)",
+    )
+    parser.add_argument(
+        "--judge",
+        type=str,
+        default="openai",
+        choices=["anthropic", "openai"],
+        help="Judge provider for open-ended mode (default: openai)",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default="gpt-4o-mini",
+        help="Judge model ID for open-ended mode (default: gpt-4o-mini)",
+    )
+    parser.add_argument(
+        "--judge-api-key",
+        type=str,
+        default=None,
+        help="API key for the judge (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)",
     )
     parser.add_argument(
         "--group-by",
