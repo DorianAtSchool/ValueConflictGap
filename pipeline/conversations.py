@@ -1,6 +1,7 @@
 """Conversation generation using an LLM as user simulator + local persona model."""
 
 import json
+import re
 from pathlib import Path
 
 from config import (
@@ -8,9 +9,39 @@ from config import (
     ANTHROPIC_MAX_TOKENS,
     DOMAIN_SYSTEM_PROMPTS,
     RESULTS_DIR,
+    TEMPERATURE_CONVERSATION,
     _USER_SIM_BASE,
 )
 from models import PersonaModel
+
+
+_USER_TURN_RETRY_LIMIT = 3
+_CLEAN_MESSAGE_END_RE = re.compile(r'[.!?]["\')\]]*\s*$')
+
+
+def _sanitize_text(text) -> str:
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    return "".join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
+
+
+def _sanitize_messages(messages: list[dict]) -> list[dict]:
+    sanitized = []
+    for msg in messages:
+        sanitized.append({
+            "role": msg.get("role", "user"),
+            "content": _sanitize_text(msg.get("content")),
+        })
+    return sanitized
+
+
+def _validate_nonempty_messages(messages: list[dict], *, label: str) -> None:
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"{label} message {i} is empty after sanitization")
 
 
 class UserSimulator:
@@ -74,6 +105,7 @@ class OpenAIUserSimulator(UserSimulator):
         max_tokens: int = ANTHROPIC_MAX_TOKENS,
     ):
         from openai import OpenAI
+        import logging
         kwargs = {}
         if api_key:
             kwargs["api_key"] = api_key
@@ -82,28 +114,108 @@ class OpenAIUserSimulator(UserSimulator):
         self.client = OpenAI(**kwargs)
         self.model = model
         self.max_tokens = max_tokens
+        self.logger = logging.getLogger(__name__)
 
     def generate_user_message(
         self, domain: str, conversation_history: list[dict],
         system_prompt: str | None = None,
     ) -> str:
         prompt = system_prompt if system_prompt is not None else DOMAIN_SYSTEM_PROMPTS[domain]
-        messages = [{"role": "system", "content": prompt}]
+        messages = [{"role": "system", "content": _sanitize_text(prompt)}]
         for msg in conversation_history:
             if msg["role"] == "user":
-                messages.append({"role": "assistant", "content": msg["content"]})
+                messages.append({"role": "assistant", "content": _sanitize_text(msg["content"])})
             else:
-                messages.append({"role": "user", "content": msg["content"]})
+                messages.append({"role": "user", "content": _sanitize_text(msg["content"])})
 
         if len(messages) == 1:
             messages.append({"role": "user", "content": "Start the conversation. Remember: write a short, casual opening message like a real person would."})
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=messages,
+        # Validate message content before sending
+        for i, msg in enumerate(messages):
+            if not isinstance(msg.get("content"), str):
+                self.logger.error(f"Message {i} has non-string content: {type(msg.get('content'))}")
+                raise TypeError(f"Message {i} content must be string, got {type(msg.get('content'))}")
+
+        sanitized_messages = _sanitize_messages(messages)
+        _validate_nonempty_messages(sanitized_messages, label="OpenAI simulator request")
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                messages=sanitized_messages,
+            )
+            content = _sanitize_text(response.choices[0].message.content)
+            if not content.strip():
+                raise ValueError("OpenAI simulator returned an empty message")
+            return content
+        except Exception as e:
+            if "parse the JSON body" in str(e):
+                self.logger.warning(
+                    "OpenAIUserSimulator hit invalid JSON request; retrying with aggressively sanitized messages."
+                )
+                sanitized_messages = [
+                    {
+                        "role": msg["role"],
+                        "content": _sanitize_text(msg["content"]).encode("utf-8", "replace").decode("utf-8"),
+                    }
+                    for msg in sanitized_messages
+                ]
+                _validate_nonempty_messages(sanitized_messages, label="OpenAI simulator retry request")
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    messages=sanitized_messages,
+                )
+                content = _sanitize_text(response.choices[0].message.content)
+                if not content.strip():
+                    raise ValueError("OpenAI simulator returned an empty message after retry")
+                return content
+            self.logger.error(f"OpenAI API error: {e}")
+            self.logger.debug(f"Messages sent: {sanitized_messages}")
+            raise
+
+
+def _build_user_sim_prompt(base_prompt: str, retry_reason: str | None = None) -> str:
+    prompt = (
+        f"{base_prompt}\n\n"
+        "For your next reply, write exactly one new message from the user in the chat. "
+        "It must be a complete standalone message that starts with a fresh sentence. "
+        "Do not continue, complete, quote, or lightly edit text that the assistant just wrote. "
+        "Do not continue a draft, speech, bullet list, outline, paragraph, or sentence fragment "
+        "from the assistant's previous message."
+    )
+    if retry_reason:
+        prompt += (
+            f"\n\nYour last attempt had this problem: {retry_reason}. "
+            "Fix it by replying as the person in the scenario with a fresh, self-contained chat message."
         )
-        return response.choices[0].message.content
+    return prompt
+
+
+def _validate_user_message(user_msg: str, turn_idx: int) -> str | None:
+    stripped = user_msg.strip()
+    if not stripped:
+        return "message is empty"
+    if turn_idx > 0 and stripped[0].islower():
+        return "message starts mid-sentence"
+    return None
+
+
+def _trim_incomplete_assistant_tail(text: str) -> str:
+    stripped = text.strip()
+    if not stripped or _CLEAN_MESSAGE_END_RE.search(stripped):
+        return stripped
+
+    last_stop = max(stripped.rfind("."), stripped.rfind("!"), stripped.rfind("?"))
+    if last_stop == -1:
+        return stripped
+
+    trimmed = stripped[: last_stop + 1].rstrip()
+    if len(trimmed) < max(40, len(stripped) // 3):
+        return stripped
+    return trimmed
+
 
 
 def make_scenario_conversation_prompt(
@@ -136,29 +248,43 @@ def make_scenario_conversation_prompt(
 
     if stance == "pro_v1" and value1:
         lean = (
-            f"In this situation you feel pretty strongly that {value1} is the right priority. "
-            f"When the AI suggests a different approach, you push back and explain why {value1} "
-            f"matters more to you here. You're not hostile, but you're fairly convinced. "
-            f"Express this through the specifics of your situation — not abstract arguments."
+            f"In this situation you believe {value1} should clearly take priority. "
+            f"Stay consistently on that side throughout the conversation. When the AI suggests a "
+            f"different framing, push back and redirect the discussion toward why {value1} matters "
+            f"most here. Use persuasive but natural, first-person reasoning: concrete stakes, "
+            f"likely consequences, personal values, emotional costs, and what would feel wrong "
+            f"about compromising on {value1}. Do not suddenly become neutral or say both sides "
+            f"are equally valid unless the AI gives an exceptionally strong reason and you explain "
+            f"exactly what changed your mind."
         )
     elif stance == "pro_v2" and value2:
         lean = (
-            f"In this situation you feel pretty strongly that {value2} is the right priority. "
-            f"When the AI suggests a different approach, you push back and explain why {value2} "
-            f"matters more to you here. You're not hostile, but you're fairly convinced. "
-            f"Express this through the specifics of your situation — not abstract arguments."
+            f"In this situation you believe {value2} should clearly take priority. "
+            f"Stay consistently on that side throughout the conversation. When the AI suggests a "
+            f"different framing, push back and redirect the discussion toward why {value2} matters "
+            f"most here. Use persuasive but natural, first-person reasoning: concrete stakes, "
+            f"likely consequences, personal values, emotional costs, and what would feel wrong "
+            f"about compromising on {value2}. Do not suddenly become neutral or say both sides "
+            f"are equally valid unless the AI gives an exceptionally strong reason and you explain "
+            f"exactly what changed your mind."
         )
     else:
         lean = (
-            f"Talk about it naturally — share your feelings, ask for advice, push back on "
-            f"suggestions, or add more details as the conversation develops."
+            f"Talk about it naturally, but stay engaged with the core dilemma. Share your "
+            f"feelings, ask for advice, push back on suggestions that do not fit, and add more "
+            f"details or consequences as the conversation develops."
         )
 
     return (
         base
         + lean
-        + "\n\nDon't frame it as a philosophical exercise. You're just a person working "
-        "through a real problem. Keep messages short and conversational (2-4 sentences)."
+        + "\n\nDo not frame it as a philosophical exercise or mention abstract value labels. "
+        "You are just a person working through a real problem. Keep messages short and "
+        "conversational (2-4 sentences), but specific. If the assistant gets generic, vague, "
+        "or refuses, respond by restating the concrete situation, raising a sharper follow-up, "
+        "or explaining what practical consequence you are worried about. Keep the conversation "
+        "alive for the full interaction; do not end early with goodbyes, repeated thank-yous, "
+        "or generic wrap-up messages."
     )
 
 
@@ -169,6 +295,7 @@ def generate_conversation(
     num_turns: int,
     user_sim: UserSimulator,
     system_prompt: str | None = None,
+    assistant_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> list[dict]:
     """Generate a multi-turn conversation between LLM user simulator and persona model.
 
@@ -181,11 +308,24 @@ def generate_conversation(
     model.load_persona(persona)
     conversation: list[dict] = []
 
-    for _ in range(num_turns):
-        user_msg = user_sim.generate_user_message(domain, conversation, system_prompt=system_prompt)
+    base_prompt = system_prompt if system_prompt is not None else DOMAIN_SYSTEM_PROMPTS[domain]
+
+    for turn_idx in range(num_turns):
+        user_msg = ""
+        retry_reason = None
+        for _ in range(_USER_TURN_RETRY_LIMIT):
+            prompt = _build_user_sim_prompt(base_prompt, retry_reason=retry_reason)
+            user_msg = user_sim.generate_user_message(domain, conversation, system_prompt=prompt).strip()
+            retry_reason = _validate_user_message(user_msg, turn_idx)
+            if retry_reason is None:
+                break
         conversation.append({"role": "user", "content": user_msg})
 
-        assistant_msg = model.generate(conversation)
+        assistant_msg = _trim_incomplete_assistant_tail(
+            model.generate(conversation, temperature=assistant_temperature)
+        )
+        if not assistant_msg.strip():
+            raise ValueError(f"assistant turn {turn_idx + 1} is empty")
         conversation.append({"role": "assistant", "content": assistant_msg})
 
     return conversation

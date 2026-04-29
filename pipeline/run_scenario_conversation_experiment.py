@@ -67,6 +67,7 @@ import gc
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -85,7 +86,14 @@ from run_alignment_target_experiment import (
     ALIGNMENT_MODELS,
     build_user_simulator,
 )
+try:
+    from alignmentmodel_vllm import AlignmentModelVLLM
+    HAS_VLLM = True
+except ImportError:
+    HAS_VLLM = False
+    AlignmentModelVLLM = None
 from config import VALUE_SETS_DIR
+from config import TEMPERATURE_CONVERSATION
 from conversations import generate_conversation, make_scenario_conversation_prompt
 from probing import load_scenarios, probe_values, probe_values_openended, scenario_distribution_report
 from analysis import fit_bradley_terry, compute_drift, compute_answer_flip_rate
@@ -112,6 +120,61 @@ def save_json(path: Path, data):
 def load_json(path: Path):
     with open(path) as f:
         return json.load(f)
+
+
+_EARLY_SIGNOFF_RE = re.compile(
+    r"^(see you|talk soon|talk later|bye|goodbye|take care|catch you later|till next time|"
+    r"until next time|farewell|you too)\b",
+    re.IGNORECASE,
+)
+_ASSISTANT_REFUSAL_RE = re.compile(
+    r"\b(i'm unable to provide the help that you need|as an ai|i don't have personal experience)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_cached_conversation(conversation: list[dict], num_turns: int) -> list[str]:
+    """Return a list of validation failures for a generated conversation."""
+    issues: list[str] = []
+    expected_len = num_turns * 2
+    if len(conversation) != expected_len:
+        issues.append(f"expected {expected_len} messages, found {len(conversation)}")
+        return issues
+
+    for i, msg in enumerate(conversation):
+        expected_role = "user" if i % 2 == 0 else "assistant"
+        if msg.get("role") != expected_role:
+            issues.append(f"message {i} has role={msg.get('role')} expected={expected_role}")
+            break
+        content = (msg.get("content") or "").strip()
+        if not content:
+            issues.append(f"message {i} is empty")
+            break
+        if msg.get("role") == "user":
+            turn_idx = i // 2
+            if turn_idx > 0 and content[0].islower():
+                issues.append(f"user turn {turn_idx + 1} starts mid-sentence")
+                break
+            if turn_idx < num_turns - 2 and _EARLY_SIGNOFF_RE.match(content):
+                issues.append(f"user turn {turn_idx + 1} ends conversation early")
+                break
+
+    assistant_text = "\n".join(
+        (msg.get("content") or "") for msg in conversation if msg.get("role") == "assistant"
+    )
+    if len(_ASSISTANT_REFUSAL_RE.findall(assistant_text)) >= 2:
+        issues.append("assistant contains repeated refusal/disclaimer boilerplate")
+
+    duplicate_adjacent = 0
+    for i in range(len(conversation) - 1):
+        left = (conversation[i].get("content") or "").strip()
+        right = (conversation[i + 1].get("content") or "").strip()
+        if left and left == right:
+            duplicate_adjacent += 1
+    if duplicate_adjacent >= 2:
+        issues.append(f"{duplicate_adjacent} adjacent duplicate messages")
+
+    return issues
 
 
 def conv_checkpoint_path(
@@ -170,6 +233,7 @@ def generate_group_conversations(
     turn_counts: list[int],
     stance: str,
     log: logging.Logger,
+    conversation_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> dict[str, dict[int, list[dict]]]:
     """Generate and cache conversations for every group × turn count.
 
@@ -177,6 +241,7 @@ def generate_group_conversations(
         {group_key: {num_turns: conversation_list}}
     """
     max_turns = max(turn_counts)
+    skipped_groups: list[tuple[str, str]] = []
 
     if group_by == "pair":
         groups = {
@@ -195,31 +260,84 @@ def generate_group_conversations(
         conversations[group_key] = {}
         full_conv_path = conv_checkpoint_path(model_key, value_set, group_key, max_turns, stance)
 
+        seed = pick_seed_scenario(group_df)
+        sim_prompt = make_scenario_conversation_prompt(
+            description=seed["description"],
+            stance=stance,
+            value1=seed.get("value1", ""),
+            value2=seed.get("value2", ""),
+        )
+
+        full_conv = None
+        issues: list[str] = []
         if full_conv_path.exists():
-            log.info(f"  Conv exists: {group_key} ({max_turns}t, stance={stance})")
-            full_conv = load_json(full_conv_path)
-        else:
-            seed = pick_seed_scenario(group_df)
-            sim_prompt = make_scenario_conversation_prompt(
-                description=seed["description"],
-                stance=stance,
-                value1=seed.get("value1", ""),
-                value2=seed.get("value2", ""),
-            )
-            log.info(f"  Generating conv: {group_key} ({max_turns}t, stance={stance})")
-            full_conv = generate_conversation(
-                model=model,
-                persona=model_key,
-                domain="",  # unused — overridden by system_prompt
-                num_turns=max_turns,
-                user_sim=user_sim,
-                system_prompt=sim_prompt,
-            )
-            save_json(full_conv_path, full_conv)
+            cached_conv = load_json(full_conv_path)
+            issues = _validate_cached_conversation(cached_conv, max_turns)
+            if issues:
+                log.warning(
+                    "  Conv exists but is invalid, regenerating: %s (%dt, stance=%s) [%s]",
+                    group_key, max_turns, stance, "; ".join(issues)
+                )
+            else:
+                log.info(f"  Conv exists: {group_key} ({max_turns}t, stance={stance})")
+                full_conv = cached_conv
+
+        if not full_conv_path.exists() or issues:
+            full_conv = None
+            last_issues: list[str] = []
+            for attempt in range(1, 4):
+                log.info(
+                    f"  Generating conv: {group_key} ({max_turns}t, stance={stance}, attempt={attempt})"
+                )
+                try:
+                    candidate = generate_conversation(
+                        model=model,
+                        persona=model_key,
+                        domain="",  # unused — overridden by system_prompt
+                        num_turns=max_turns,
+                        user_sim=user_sim,
+                        system_prompt=sim_prompt,
+                        assistant_temperature=conversation_temperature,
+                    )
+                except Exception as e:
+                    last_issues = [f"generation error: {e}"]
+                    log.warning(
+                        "    Conversation generation failed for %s [%s]",
+                        group_key,
+                        e,
+                    )
+                    continue
+                last_issues = _validate_cached_conversation(candidate, max_turns)
+                if not last_issues:
+                    full_conv = candidate
+                    save_json(full_conv_path, full_conv)
+                    break
+                log.warning(
+                    "    Invalid generated conversation for %s [%s]",
+                    group_key, "; ".join(last_issues),
+                )
+            if full_conv is None:
+                reason = "; ".join(last_issues) if last_issues else "unknown validation failure"
+                log.error(
+                    "  Skipping group after 3 invalid attempts: %s (%dt, stance=%s) [%s]",
+                    group_key,
+                    max_turns,
+                    stance,
+                    reason,
+                )
+                skipped_groups.append((group_key, reason))
+                continue
 
         # Slice to each requested turn count
         for num_turns in turn_counts:
             conversations[group_key][num_turns] = full_conv[: num_turns * 2]
+
+    if skipped_groups:
+        log.warning(
+            "  Skipped %d groups for stance=%s due to repeated invalid conversations",
+            len(skipped_groups),
+            stance,
+        )
 
     return conversations
 
@@ -264,11 +382,18 @@ def analyze_pair_drift(
     drift = compute_drift(ranking_t0, ranking_t1)
     flip_stats = compute_answer_flip_rate(outcomes_t0, outcomes_t1_all)
 
+    # Re-group from the actual matched T1 outcomes so downstream pair-level
+    # metrics work for both pair-grouped and scenario-grouped runs.
+    t1_by_pair = {
+        f"{v1}_vs_{v2}": sub
+        for (v1, v2), sub in outcomes_t1_all.groupby(["value1", "value2"])
+    }
+
     # --- per-pair directional consistency ---
     pair_consistency: dict[str, dict] = {}
     for (v1, v2), pair_t0 in outcomes_t0.groupby(["value1", "value2"]):
         pair_key = f"{v1}_vs_{v2}"
-        pair_t1 = outcomes_t1_by_group.get(pair_key)
+        pair_t1 = t1_by_pair.get(pair_key)
         if pair_t1 is None or pair_t1.empty:
             continue
 
@@ -316,7 +441,7 @@ def analyze_pair_drift(
             if stance == "pro_v2" and value != v2:
                 continue
             pair_key = f"{v1}_vs_{v2}"
-            pair_t1 = outcomes_t1_by_group.get(pair_key)
+            pair_t1 = t1_by_pair.get(pair_key)
             if pair_t1 is None or pair_t1.empty:
                 continue
             merged = pair_t0.merge(pair_t1, on="scenario_id", suffixes=("_t0", "_t1"))
@@ -365,7 +490,7 @@ def analyze_pair_drift(
                    (stance == "pro_v2" and v2 != target_value):
                     continue
                 pair_key = f"{v1}_vs_{v2}"
-                pair_t1 = outcomes_t1_by_group.get(pair_key)
+                pair_t1 = t1_by_pair.get(pair_key)
                 if pair_t1 is None or pair_t1.empty:
                     continue
                 role_t0_parts.append(pair_t0)
@@ -414,8 +539,8 @@ def analyze_pair_drift(
                 f"(n={s['total_appearances']})"
             )
     # --- per-value flip stats (all appearances — never role-filtered) ---
-    # Computed unconditionally so plots can show overall vs. role-filtered side
-    # by side even for non-neutral stances.
+    # Computed unconditionally so stance plots can show all values, including
+    # those on the non-favored side of the pairing.
     per_value_flip_stats_overall: dict[str, dict] = {}
     for value in all_values:
         total_appearances = 0
@@ -425,7 +550,7 @@ def analyze_pair_drift(
             if value not in (v1, v2):
                 continue
             pair_key = f"{v1}_vs_{v2}"
-            pair_t1 = outcomes_t1_by_group.get(pair_key)
+            pair_t1 = t1_by_pair.get(pair_key)
             if pair_t1 is None or pair_t1.empty:
                 continue
             merged = pair_t0.merge(pair_t1, on="scenario_id", suffixes=("_t0", "_t1"))
@@ -497,6 +622,9 @@ def run_experiment(
     judge_client,
     judge_model: str,
     log: logging.Logger,
+    use_vllm: bool = False,
+    gpu_ids: list[int] | None = None,
+    conversation_temperature: float = TEMPERATURE_CONVERSATION,
 ) -> list[dict]:
     """Run all (value_set × stance × num_turns) conditions for one model.
 
@@ -504,10 +632,28 @@ def run_experiment(
     T0 probing is shared across stances (same baseline, no context).
     """
     log.info(f"Loading model: {model_key} ({model_info['hf_id']})")
-    model = AlignmentModel(
-        model_info["hf_id"],
-        is_base_model=model_info.get("is_base_model", False),
-    )
+
+    # Check if this is an OpenAI model
+    if model_info.get("is_openai"):
+        log.info(f"  Using OpenAI API model: {model_info['hf_id']}")
+        from run_alignment_target_experiment import OpenAIModel
+        model = OpenAIModel(model_id=model_info["hf_id"])
+    # Use vLLM if requested and available
+    elif use_vllm:
+        if not HAS_VLLM:
+            log.error("--use-vllm specified but vLLM is not installed. Install with: pip install vllm")
+            return []
+        log.info(f"  Using vLLM with gpu_ids={gpu_ids}")
+        model = AlignmentModelVLLM(
+            model_info["hf_id"],
+            is_base_model=model_info.get("is_base_model", False),
+            gpu_ids=gpu_ids,
+        )
+    else:
+        model = AlignmentModel(
+            model_info["hf_id"],
+            is_base_model=model_info.get("is_base_model", False),
+        )
 
     all_results = []
 
@@ -552,6 +698,7 @@ def run_experiment(
                 turn_counts=turn_counts,
                 stance=stance,
                 log=log,
+                conversation_temperature=conversation_temperature,
             )
 
             # --- T1: per-group probing ---
@@ -630,7 +777,8 @@ def run_experiment(
 # Summary CSV
 # ---------------------------------------------------------------------------
 
-def save_summary_csv(all_results: list[dict], log: logging.Logger):
+def save_summary_csv(all_results: list[dict], log: logging.Logger, run_id: str = "latest"):
+    """Save results to a per-run folder (preserves previous runs)."""
     rows = []
     for r in all_results:
         row = {
@@ -676,9 +824,48 @@ def save_summary_csv(all_results: list[dict], log: logging.Logger):
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    out_path = RESULTS_DIR / "all_results.csv"
+
+    # Create run-specific folder
+    run_dir = RESULTS_DIR / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = run_dir / "all_results.csv"
     df.to_csv(out_path, index=False)
     log.info(f"Summary saved: {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Multi-GPU support
+# ---------------------------------------------------------------------------
+
+def allocate_gpus(model_keys: list[str], available_gpu_ids: list[int]) -> dict[str, list[int]]:
+    """Distribute models across available GPUs in round-robin fashion.
+
+    Args:
+        model_keys: List of model keys to allocate
+        available_gpu_ids: List of available GPU IDs
+
+    Returns:
+        dict mapping model_key -> list of GPU IDs
+    """
+    allocation = {}
+    n_gpus = len(available_gpu_ids)
+
+    if n_gpus == 0:
+        raise ValueError("No GPUs available")
+
+    # Round-robin assignment: distribute GPUs evenly
+    gpus_per_model = max(1, n_gpus // len(model_keys))
+
+    for i, model_key in enumerate(model_keys):
+        start_idx = (i * gpus_per_model) % n_gpus
+        gpu_list = []
+        for j in range(gpus_per_model):
+            gpu_id = available_gpu_ids[(start_idx + j) % n_gpus]
+            gpu_list.append(gpu_id)
+        allocation[model_key] = gpu_list
+
+    return allocation
 
 
 # ---------------------------------------------------------------------------
@@ -706,9 +893,11 @@ def parse_args():
     )
 
     # User simulator
-    parser.add_argument("--simulator", type=str, default="anthropic",
-                        choices=["anthropic", "openai"])
-    parser.add_argument("--simulator-model", type=str, default=None)
+    parser.add_argument("--simulator", type=str, default="openai",
+                        choices=["anthropic", "openai"],
+                        help="User simulator provider (default: openai for gpt-4o-mini)")
+    parser.add_argument("--simulator-model", type=str, default="gpt-4o-mini",
+                        help="Simulator model ID (default: gpt-4o-mini for speed and cost)")
     parser.add_argument("--simulator-base-url", type=str, default=None)
     parser.add_argument("--simulator-api-key", type=str, default=None)
 
@@ -754,6 +943,29 @@ def parse_args():
     parser.add_argument(
         "--num-scenarios", type=int, default=0,
         help="Max scenarios per value set (0 = all). 200-300 recommended for speed.",
+    )
+    parser.add_argument(
+        "--conversation-temperature",
+        type=float,
+        default=TEMPERATURE_CONVERSATION,
+        help=(
+            "Assistant decoding temperature for local conversation turns "
+            f"(default: {TEMPERATURE_CONVERSATION}). Use 0.0 for deterministic decoding."
+        ),
+    )
+
+    # Multi-GPU configuration
+    parser.add_argument(
+        "--use-vllm", action="store_true",
+        help="Use vLLM with tensor parallelism for multi-GPU inference (faster than device_map=auto)",
+    )
+    parser.add_argument(
+        "--gpu-ids", type=str, default=None,
+        help="Comma-separated GPU IDs to use (e.g., '0,1,2,3'). If not specified, auto-detects all available GPUs.",
+    )
+    parser.add_argument(
+        "--skip-postprocess", action="store_true",
+        help="Run the experiment and save per-condition JSONs, but skip summary CSV and plot generation.",
     )
 
     return parser.parse_args()
@@ -823,10 +1035,37 @@ def main():
             judge_client = anthropic.Anthropic(api_key=judge_key)
         log.info(f"  Judge: {args.judge} / {args.judge_model}")
 
+    # GPU detection and allocation
+    if args.use_vllm:
+        # Parse GPU IDs or auto-detect
+        if args.gpu_ids:
+            available_gpus = [int(g.strip()) for g in args.gpu_ids.split(',')]
+        else:
+            available_gpus = list(range(torch.cuda.device_count()))
+
+        if not available_gpus:
+            log.error("--use-vllm specified but no GPUs detected. Use CPU or check CUDA setup.")
+            sys.exit(1)
+
+        log.info(f"GPU allocation enabled: {len(available_gpus)} GPUs available")
+
+        # Allocate GPUs to models
+        gpu_allocation = allocate_gpus(args.models, available_gpus)
+        for model_key, gpu_ids in gpu_allocation.items():
+            log.info(f"  {model_key}: GPU {gpu_ids}")
+    else:
+        gpu_allocation = None
+
     # Run all models sequentially; load each model once, iterate stances inside
     all_results = []
     for model_key in args.models:
         log.info(f"--- Model: {model_key} ---")
+
+        # Get GPU IDs for this model if using vLLM
+        model_gpu_ids = None
+        if args.use_vllm and gpu_allocation:
+            model_gpu_ids = gpu_allocation[model_key]
+
         results = run_experiment(
             model_key=model_key,
             model_info=ALIGNMENT_MODELS[model_key],
@@ -840,16 +1079,22 @@ def main():
             judge_client=judge_client,
             judge_model=args.judge_model,
             log=log,
+            use_vllm=args.use_vllm,
+            gpu_ids=model_gpu_ids,
+            conversation_temperature=args.conversation_temperature,
         )
         all_results.extend(results)
 
-    save_summary_csv(all_results, log)
-    log.info("Generating plots...")
-    try:
-        generate_scenario_experiment_plots(all_results, RESULTS_DIR, run_id=run_id)
-        log.info(f"Plots saved to {RESULTS_DIR / 'plots' / run_id}")
-    except Exception as e:
-        log.warning(f"Plot generation failed (non-fatal): {e}")
+    if not args.skip_postprocess:
+        save_summary_csv(all_results, log, run_id=run_id)
+        log.info("Generating plots...")
+        try:
+            generate_scenario_experiment_plots(all_results, RESULTS_DIR, run_id=run_id)
+            log.info(f"Plots saved to {RESULTS_DIR / 'plots' / run_id}")
+        except Exception as e:
+            log.warning(f"Plot generation failed (non-fatal): {e}")
+    else:
+        log.info("Skipping summary CSV / plot generation (--skip-postprocess)")
     log.info("Done.")
 
 

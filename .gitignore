@@ -34,3 +34,15 @@ Thumbs.db
 
 # HuggingFace cache
 .cache/
+
+# Scenario conversation artifacts
+# Keep reusable scenario-based conversations and checkpoints,
+# but ignore derived runs/plots and legacy pair-based caches.
+pipeline/results/scenario_conversation/plots/
+pipeline/results/scenario_conversation/runs/
+pipeline/results/scenario_conversation/shard_logs/
+pipeline/results/scenario_conversation/*.csv
+pipeline/results/scenario_conversation/*.json
+pipeline/results/scenario_conversation/*.log
+pipeline/results/scenario_conversation/conversations/**/*_vs_*.json
+pipeline/results/scenario_conversation/checkpoints/*_vs_*.json
