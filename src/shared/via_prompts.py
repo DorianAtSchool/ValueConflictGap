@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-from config import _USER_SIM_BASE
+from src.shared.config import _USER_SIM_BASE
 
 
 VIA_CONVERSATION_STYLE = "via_scenario_grounded_conversation_v1"

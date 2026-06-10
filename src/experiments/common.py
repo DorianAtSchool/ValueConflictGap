@@ -28,12 +28,12 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--log-level", default="INFO")
 
 
-def run_pipeline_script(script: str, args: list[str], *, results_dir: Path | None = None) -> None:
+def run_experiment_module(module: str, args: list[str], *, results_dir: Path | None = None) -> None:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(PROJECT_ROOT / "pipeline") + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     if results_dir is not None:
         env["PERSONA_DRIFTING_RESULTS_DIR"] = str(PROJECT_ROOT / results_dir)
-    cmd = [sys.executable, str(PROJECT_ROOT / "pipeline" / script), *args]
+    cmd = [sys.executable, "-m", module, *args]
     subprocess.run(cmd, cwd=PROJECT_ROOT, env=env, check=True)
 
 

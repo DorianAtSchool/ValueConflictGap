@@ -77,9 +77,18 @@ data/
 src/
   experiments/
     sva.py
+    sva_runner.py
     vca.py
     vca_b.py
+    vca_runner.py
     vcp.py
+    vcp_runner.py
+  shared/
+    config.py
+    probing.py
+    via_*.py
+    scenario_value_action*_analysis.py
+    model client utilities
 
 scripts/
   run_sva.py
@@ -96,12 +105,9 @@ results/
   vcp/
   paper_plots/
 
-pipeline/
-  Legacy and exploratory implementation code retained for inspection.
-
 archive_exploratory/
-  Staging area for open-ended, multi-turn, stance, and other exploratory code
-  that is not part of the clean paper interface.
+  Legacy and exploratory code/results that are not part of the clean paper
+  interface.
 ```
 
 ## Data
@@ -112,4 +118,3 @@ entry points do not depend on external repository layouts at runtime.
 - `data/sva/`: released ValueActionLens/VIA action data for SVA.
 - `data/value_conflicts/`: ConflictScope-derived personal/protective scenarios
   and value definitions for VCA, VCA-b, and VCP.
-

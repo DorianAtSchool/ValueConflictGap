@@ -19,7 +19,7 @@ from typing import Optional
 import torch
 from transformers import AutoTokenizer
 
-from config import MAX_NEW_TOKENS_MCQ, MAX_NEW_TOKENS_CONVERSATION, BATCH_SIZE
+from src.shared.config import MAX_NEW_TOKENS_MCQ, MAX_NEW_TOKENS_CONVERSATION, BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 

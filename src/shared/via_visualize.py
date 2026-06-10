@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from via_analysis import TASK1_POLARITY, task24_vs_task1_consistency_detailed, task2_vs_task1_consistency_detailed
+from src.shared.via_analysis import TASK1_POLARITY, task24_vs_task1_consistency_detailed, task2_vs_task1_consistency_detailed
 
 
 sns.set_style("whitegrid")

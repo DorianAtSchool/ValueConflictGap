@@ -36,7 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 # Reuse model registry and AlignmentModel from the MCQ experiment
-from run_alignment_target_experiment import (
+from src.shared.run_alignment_target_experiment import (
     ALIGNMENT_MODELS,
     DEFAULT_MODELS,
     DEFAULT_VALUE_SETS,
@@ -169,7 +169,7 @@ def run_model_conditions(
 ) -> list[dict]:
     """Load one alignment model, run all open-ended T0/T1 conditions, unload."""
 
-    from probing import load_scenarios, probe_values_openended
+    from src.shared.probing import load_scenarios, probe_values_openended
     from analysis import fit_bradley_terry, compute_drift, compute_answer_flip_rate
     from visualize import plot_radar_t0_t1
 
@@ -188,7 +188,7 @@ def run_model_conditions(
         # Save scenario distribution report (once per value set)
         dist_path = RESULTS_DIR / f"scenario_distribution_{value_set}.json"
         if not dist_path.exists():
-            from probing import scenario_distribution_report
+            from src.shared.probing import scenario_distribution_report
             save_json(dist_path, scenario_distribution_report(scenarios))
 
         # --- T0 (shared across domains) ---
@@ -341,7 +341,7 @@ def run():
         )
         # Temporarily patch RESULTS_DIR so conversations are saved to the
         # canonical location (results/alignment/canonical_conversations/)
-        import run_alignment_target_experiment as rae
+        from src.shared import run_alignment_target_experiment as rae
         original_results_dir = rae.RESULTS_DIR
         rae.RESULTS_DIR = CANONICAL_CONV_DIR.parent  # results/alignment/
         try:
@@ -397,7 +397,7 @@ def run():
         results_df.to_csv(RESULTS_DIR / "all_results.csv", index=False)
 
         # Temporarily patch RESULTS_DIR in the imported function
-        import run_alignment_target_experiment as rae
+        from src.shared import run_alignment_target_experiment as rae
         original_results_dir = rae.RESULTS_DIR
         rae.RESULTS_DIR = RESULTS_DIR
         try:

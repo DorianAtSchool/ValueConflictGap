@@ -1,38 +1,4 @@
-"""Alignment method comparison experiment.
-
-Compares value ranking drift across models post-trained with different
-alignment methods (SFT, DPO, RLHF/RLVR). Uses shared canonical conversations
-so differences are attributable to the model, not conversation content.
-
-Models (all based on Llama-3.1-8B):
-    llama-3.1-base   — pretrained only, no alignment
-    tulu-3-sft       — SFT on Tulu v3 mixture
-    tulu-3-dpo       — SFT + DPO on preference mixture
-    tulu-3-rlvr      — SFT + DPO + PPO (RLVR)
-    llama-3.1-instruct — Meta's SFT + RLHF pipeline
-
-Usage:
-    # Full experiment with Claude as simulator:
-    python run_alignment_target_experiment.py --simulator-api-key sk-ant-...
-
-    # Quick test with one model:
-    python run_alignment_target_experiment.py \
-        --models tulu-3-sft \
-        --value-sets HHH \
-        --domains politics \
-        --turn-counts 5 \
-        --simulator-api-key sk-ant-...
-
-    # With OpenAI simulator:
-    python run_alignment_target_experiment.py \
-        --simulator openai --simulator-model gpt-4o-mini \
-        --simulator-api-key sk-...
-
-    # Custom reference model for canonical conversations:
-    python run_alignment_target_experiment.py \
-        --reference-model allenai/Llama-3.1-Tulu-3-8B-SFT \
-        --simulator-api-key sk-ant-...
-"""
+"""Model registry and provider clients shared by the paper experiments."""
 
 import argparse
 import gc
@@ -48,7 +14,7 @@ import pandas as pd
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from config import (
+from src.shared.config import (
     VALUE_SETS_DIR,
     GENERIC_DOMAINS,
     DOMAIN_SYSTEM_PROMPTS,
@@ -778,7 +744,7 @@ def build_user_simulator(args):
         if not os.environ.get("ANTHROPIC_API_KEY"):
             print("ERROR: No Anthropic API key.")
             sys.exit(1)
-        from conversations import AnthropicUserSimulator
+        from src.shared.conversations import AnthropicUserSimulator
         kwargs = {}
         if args.simulator_model:
             kwargs["model"] = args.simulator_model
@@ -789,7 +755,7 @@ def build_user_simulator(args):
         if not args.simulator_api_key and not os.environ.get("OPENAI_API_KEY"):
             print("ERROR: No OpenAI API key.")
             sys.exit(1)
-        from conversations import OpenAIUserSimulator
+        from src.shared.conversations import OpenAIUserSimulator
         return OpenAIUserSimulator(
             model=args.simulator_model or "gpt-4o-mini",
             api_key=args.simulator_api_key,
@@ -805,7 +771,7 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results" / "alignment"
 
 
 def get_value_aligned_system_prompt(value_name: str, value_def: str) -> str:
-    from config import _USER_SIM_BASE
+    from src.shared.config import _USER_SIM_BASE
     return (
         f"{_USER_SIM_BASE}\n\n"
         f"Your persona: You're someone whose life situations naturally involve questions "
@@ -896,7 +862,7 @@ def generate_canonical_conversations(
     log.info(f"Loading reference model: {reference_model_id}")
     ref_model = AlignmentModel(reference_model_id)
 
-    from conversations import generate_conversation
+    from src.shared.conversations import generate_conversation
 
     for vs in value_sets:
         for domain in domains_per_vs[vs]:
@@ -929,7 +895,7 @@ def run_model_conditions(
 ) -> list[dict]:
     """Load one alignment model, run all its T0/T1 conditions, unload."""
 
-    from probing import load_scenarios, probe_values, scenario_distribution_report
+    from src.shared.probing import load_scenarios, probe_values, scenario_distribution_report
     from analysis import fit_bradley_terry, compute_drift, compute_answer_flip_rate
     from visualize import plot_radar_t0_t1
 

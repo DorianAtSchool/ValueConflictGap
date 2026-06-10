@@ -17,7 +17,7 @@ from textwrap import dedent
 
 import pandas as pd
 
-from config import (
+from src.shared.config import (
     BATCH_SIZE,
     MAX_NEW_TOKENS_MCQ,
     MAX_NEW_TOKENS_OPENENDED,
@@ -25,24 +25,24 @@ from config import (
     TEMPERATURE_OPENENDED,
     VALUE_SETS,
 )
-from probing import (
+from src.shared.probing import (
     load_scenarios,
     load_swap_decisions,
     load_value_descriptions,
     parse_mcq_response,
     _should_swap_options,
 )
-from run_alignment_target_experiment import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel
-from run_alignment_target_experiment_openended import build_judge_client
+from src.shared.model_clients import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel
+from src.shared.judging import build_judge_client
 try:
-    from alignmentmodel_vllm import AlignmentModelVLLM
+    from src.shared.alignmentmodel_vllm import AlignmentModelVLLM
     HAS_VLLM = True
 except ImportError:
     HAS_VLLM = False
     AlignmentModelVLLM = None
-from via_extraction import classify_task1, classify_task2
+from src.shared.via_extraction import classify_task1, classify_task2
 
-from scenario_value_action_gap_analysis import (
+from src.shared.scenario_value_action_gap_analysis import (
     AGREEMENT_SCORE,
     build_value_action_gap_detailed,
     summarize_gap_by_pair,
@@ -102,7 +102,7 @@ def _build_target_model(model_key: str, args):
     if info.get("is_openai"):
         return OpenAIModel(model_id=info["hf_id"], api_key=args.openai_api_key)
     if info.get("is_anthropic"):
-        from run_alignment_target_experiment import AnthropicModel
+        from src.shared.model_clients import AnthropicModel
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         return AnthropicModel(model_id=info["hf_id"], api_key=api_key)

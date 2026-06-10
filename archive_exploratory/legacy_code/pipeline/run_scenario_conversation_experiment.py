@@ -81,20 +81,20 @@ import torch
 # Reuse AlignmentModel and build_user_simulator from the alignment experiment.
 # This avoids duplicating the model wrapper code.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_alignment_target_experiment import (
+from src.shared.run_alignment_target_experiment import (
     AlignmentModel,
     ALIGNMENT_MODELS,
     build_user_simulator,
 )
 try:
-    from alignmentmodel_vllm import AlignmentModelVLLM
+    from src.shared.alignmentmodel_vllm import AlignmentModelVLLM
     HAS_VLLM = True
 except ImportError:
     HAS_VLLM = False
     AlignmentModelVLLM = None
-from config import SCENARIO_PATHS, VALUE_SETS_DIR
-from conversations import generate_conversation, make_scenario_conversation_prompt
-from probing import (
+from src.shared.config import SCENARIO_PATHS, VALUE_SETS_DIR
+from src.shared.conversations import generate_conversation, make_scenario_conversation_prompt
+from src.shared.probing import (
     OPENENDED_ASSISTANT_SYSTEM_PROMPT,
     OPENENDED_JUDGE_STYLE,
     OPENENDED_PROMPT_STYLE,
@@ -803,13 +803,13 @@ def run_experiment(
     # Check if this is an OpenAI model
     if model_info.get("is_openai"):
         log.info(f"  Using OpenAI API model: {model_info['hf_id']}")
-        from run_alignment_target_experiment import OpenAIModel
+        from src.shared.run_alignment_target_experiment import OpenAIModel
         api_key = os.environ.get("OPENAI_API_KEY")
         model = OpenAIModel(model_id=model_info["hf_id"], api_key=api_key)
     # Check if this is an Anthropic model
     elif model_info.get("is_anthropic"):
         log.info(f"  Using Anthropic API model: {model_info['hf_id']}")
-        from run_alignment_target_experiment import AnthropicModel
+        from src.shared.run_alignment_target_experiment import AnthropicModel
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         model = AnthropicModel(model_id=model_info["hf_id"], api_key=api_key)
     # Use vLLM if requested and available
@@ -843,7 +843,7 @@ def run_experiment(
 
         # Initialize scenario-set-specific A/B swap decisions for MCQ probing.
         # The checkpoint is reused only when the sampled scenario set matches.
-        from probing import load_swap_decisions
+        from src.shared.probing import load_swap_decisions
         swap_cp = None if force_recompute else RESULTS_DIR / "checkpoints" / f"swap_decisions_{value_set}.json"
         swap_decisions = load_swap_decisions(scenarios, swap_cp, seed=42)
         swapped_count = sum(swap_decisions.values())
@@ -1322,7 +1322,7 @@ def main():
         sys.exit(1)
 
     # Validate value sets
-    from config import VALUE_SETS
+    from src.shared.config import VALUE_SETS
     for vs in args.value_sets:
         if vs not in VALUE_SETS:
             log.error(f"Unknown value set: {vs}. Available: {VALUE_SETS}")

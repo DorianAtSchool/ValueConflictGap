@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .common import run_pipeline_script
+from .common import run_experiment_module
 from .vca import build_parser as build_vca_parser, command_args
 
 
@@ -15,8 +15,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
-    run_pipeline_script(
-        "run_scenario_value_action_gap_experiment.py",
+    run_experiment_module(
+        "src.experiments.vca_runner",
         command_args(args, explicit_tradeoff=True),
         results_dir="results/vca_b",
     )

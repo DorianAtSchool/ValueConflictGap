@@ -17,17 +17,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from run_alignment_target_experiment import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel, build_user_simulator
-from run_alignment_target_experiment_openended import build_judge_client
+from src.shared.model_clients import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel, build_user_simulator
+from src.shared.judging import build_judge_client
 try:
-    from alignmentmodel_vllm import AlignmentModelVLLM
+    from src.shared.alignmentmodel_vllm import AlignmentModelVLLM
     HAS_VLLM = True
 except ImportError:
     HAS_VLLM = False
     AlignmentModelVLLM = None
 
-from config import VALUE_SETS
-from probing import (
+from src.shared.config import VALUE_SETS
+from src.shared.probing import (
     probe_action_choices_openended,
     load_scenarios,
     load_swap_decisions,
@@ -37,8 +37,7 @@ from probing import (
     probe_values,
     probe_values_openended,
 )
-from run_scenario_conversation_experiment import generate_group_conversations
-from scenario_value_action_analysis import (
+from src.shared.scenario_value_action_analysis import (
     merge_value_action_outcomes,
     selection_gap_by_pair,
     selection_gap_by_value,
@@ -95,7 +94,7 @@ def _build_target_model(model_key: str, args):
     if info.get("is_openai"):
         return OpenAIModel(model_id=info["hf_id"], api_key=args.openai_api_key)
     if info.get("is_anthropic"):
-        from run_alignment_target_experiment import AnthropicModel
+        from src.shared.model_clients import AnthropicModel
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         return AnthropicModel(model_id=info["hf_id"], api_key=api_key)
@@ -304,6 +303,11 @@ def main():
                 positive_turns = [t for t in args.turn_counts if t > 0]
                 if not positive_turns:
                     continue
+
+                raise RuntimeError(
+                    "Conversation-conditioned VCP runs are archived exploratory code. "
+                    "The clean paper interface supports --turn-counts 0 only."
+                )
 
                 for stance in args.stances:
                     log.info(

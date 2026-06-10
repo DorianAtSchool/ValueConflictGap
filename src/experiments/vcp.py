@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .common import add_common_args, append_bool, append_if_present, run_pipeline_script
+from .common import add_common_args, append_bool, append_if_present, run_experiment_module
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,7 +38,7 @@ def run(args: argparse.Namespace) -> None:
     ]
     append_if_present(cmd, "--openai-api-key", args.openai_api_key)
     append_bool(cmd, "--use-vllm", args.use_vllm)
-    run_pipeline_script("run_scenario_value_action_experiment.py", cmd, results_dir="results/vcp")
+    run_experiment_module("src.experiments.vcp_runner", cmd, results_dir="results/vcp")
 
 
 def main() -> None:

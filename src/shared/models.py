@@ -9,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 from typing import Optional
 
-from config import BASE_MODEL, PERSONA_HUB, MAX_NEW_TOKENS_MCQ, MAX_NEW_TOKENS_CONVERSATION
+from src.shared.config import BASE_MODEL, PERSONA_HUB, MAX_NEW_TOKENS_MCQ, MAX_NEW_TOKENS_CONVERSATION
 
 
 class PersonaModel:

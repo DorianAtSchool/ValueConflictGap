@@ -4,14 +4,14 @@ import json
 import re
 from pathlib import Path
 
-from config import (
+from src.shared.config import (
     ANTHROPIC_MODEL,
     ANTHROPIC_MAX_TOKENS,
     DOMAIN_SYSTEM_PROMPTS,
     RESULTS_DIR,
     _USER_SIM_BASE,
 )
-from models import PersonaModel
+from src.shared.models import PersonaModel
 
 
 _USER_TURN_RETRY_LIMIT = 3

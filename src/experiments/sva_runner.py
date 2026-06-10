@@ -13,17 +13,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from conversations import generate_conversation
-from run_alignment_target_experiment import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel, build_user_simulator
-from run_alignment_target_experiment_openended import build_judge_client
+from src.shared.conversations import generate_conversation
+from src.shared.model_clients import ALIGNMENT_MODELS, AlignmentModel, OpenAIModel, build_user_simulator
+from src.shared.judging import build_judge_client
 try:
-    from alignmentmodel_vllm import AlignmentModelVLLM
+    from src.shared.alignmentmodel_vllm import AlignmentModelVLLM
     HAS_VLLM = True
 except ImportError:
     HAS_VLLM = False
     AlignmentModelVLLM = None
 
-from via_analysis import (
+from src.shared.via_analysis import (
     pairwise_comparisons,
     summarize_condition,
     task1_mcq_vs_openended_aggregates,
@@ -37,9 +37,9 @@ from via_analysis import (
     task2_vs_task1_consistency,
     task2_vs_task1_consistency_detailed,
 )
-from via_data import balanced_sample, task1_rows, task2_4way_rows, task2_rows
-from via_extraction import classify_task1, classify_task2, classify_task2_4way
-from via_prompts import (
+from src.shared.via_data import balanced_sample, task1_rows, task2_4way_rows, task2_rows
+from src.shared.via_extraction import classify_task1, classify_task2, classify_task2_4way
+from src.shared.via_prompts import (
     VIA_OPENENDED_ASSISTANT_SYSTEM_PROMPT,
     make_task1_conversation_prompt,
     make_task2_conversation_prompt,
@@ -50,7 +50,7 @@ from via_prompts import (
     task2_judge_prompt,
     task2_prompt,
 )
-from via_visualize import generate_via_plots
+from src.shared.via_visualize import generate_via_plots
 
 
 RESULTS_DIR = Path(os.environ.get("PERSONA_DRIFTING_RESULTS_DIR", Path(__file__).resolve().parent / "results" / "via"))
@@ -98,7 +98,7 @@ def _build_target_model(model_key: str, args):
     if info.get("is_openai"):
         return OpenAIModel(model_id=info["hf_id"], api_key=args.openai_api_key)
     if info.get("is_anthropic"):
-        from run_alignment_target_experiment import AnthropicModel
+        from src.shared.model_clients import AnthropicModel
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         return AnthropicModel(model_id=info["hf_id"], api_key=api_key)

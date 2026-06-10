@@ -8,7 +8,7 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 
-from config import (
+from src.shared.config import (
     SCENARIO_PATHS,
     BATCH_SIZE,
     MAX_NEW_TOKENS_MCQ,
@@ -22,7 +22,7 @@ from config import (
 # at module level so this file works even when those aren't installed.
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from models import PersonaModel
+    from src.shared.models import PersonaModel
 
 # Global swap decisions loaded once per experiment/run.
 _SWAP_DECISIONS: dict[str, bool] = {}
