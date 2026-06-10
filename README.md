@@ -1,7 +1,7 @@
-# PersonaDrifting
+# The Value-Action Gap in Value Conflicts
 
 This repository contains a clean, self-contained implementation of the paper
-experiments for measuring value-action gaps in language models.
+experiments for measuring value-action gaps in value conflicts in language models.
 
 ## Experiments
 
@@ -10,8 +10,7 @@ experiments for measuring value-action gaps in language models.
 - **VCA-b**: VCA with explicit trade-off prompting.
 - **VCP**: value-conflict preference-to-action.
 
-The paper-facing entry points use MCQ probes, single-turn prompting, label-only
-value text, and `500` sampled scenarios by default. vLLM is disabled by default.
+The paper-facing entry points use MCQ probes, single-turn prompting, and `500` sampled scenarios by default. vLLM is disabled by default.
 
 ## Setup
 
@@ -23,7 +22,6 @@ Set provider keys as needed:
 
 ```bash
 export OPENAI_API_KEY=...
-export ANTHROPIC_API_KEY=...
 ```
 
 ## Run Individual Experiments
@@ -45,7 +43,7 @@ qwen-2.5-7b-instruct
 tulu-3-sft
 ```
 
-Use vLLM only when explicitly requested:
+If you wish to use vLLM:
 
 ```bash
 python scripts/run_vca.py --models gemma-2-9b-it --use-vllm
@@ -111,9 +109,6 @@ archive_exploratory/
 ```
 
 ## Data
-
-Static experiment inputs are vendored under `data/` so the clean experiment
-entry points do not depend on external repository layouts at runtime.
 
 - `data/sva/`: released ValueActionLens/VIA action data for SVA.
 - `data/value_conflicts/`: ConflictScope-derived personal/protective scenarios
