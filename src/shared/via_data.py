@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = PROJECT_ROOT / "data"
 TASK2_FULL_DATA_PATH = DATA_ROOT / "sva" / "value_action_gap_full_data_gpt_4o_generation.csv"
 

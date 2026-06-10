@@ -4,12 +4,12 @@ import os
 from pathlib import Path
 
 # --- Paths ---
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAPER_DATA_DIR = PROJECT_ROOT / "data"
 CONFLICTSCOPE_DIR = PROJECT_ROOT / "conflictscope"
 DATA_DIR = PAPER_DATA_DIR / "value_conflicts"
 VALUE_SETS_DIR = DATA_DIR / "value_sets"
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = PROJECT_ROOT / "results"
 
 # --- Model ---
 BASE_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
